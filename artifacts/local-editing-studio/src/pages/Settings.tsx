@@ -1,17 +1,31 @@
 import React, { useEffect, useState } from 'react';
-import { useStore, updateSettings, clearStore } from '@/lib/store';
-import { clearLocalMedia } from '@/lib/local-media';
+import { useStore, updateEngine, updateSettings, clearStore } from '@/lib/store';
+import { clearLocalMedia, LOCAL_ENGINE_ORIGIN, localEngine } from '@/lib/local-media';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router, CircleCheck, CircleX } from 'lucide-react';
+import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router, RefreshCw, CircleCheck, CircleX } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
+  const engine = useStore((state) => state.engine);
   const [availability, setAvailability] = useState<{ gemini: boolean; openrouter: boolean } | null>(null);
 
+  const checkEngine = async () => {
+    localEngine.setPairingToken(settings.pairingToken);
+    updateEngine(() => ({ status: 'checking', error: undefined }));
+    try {
+      const health = await localEngine.health();
+      await localEngine.testPairing();
+      updateEngine(() => ({ ...health, status: 'connected', error: undefined, lastCheckedAt: Date.now() }));
+    } catch (error) {
+      updateEngine(() => ({ status: 'disconnected', error: error instanceof Error ? error.message : 'Local engine is unavailable.', lastCheckedAt: Date.now() }));
+    }
+  };
+
   useEffect(() => {
+    void checkEngine();
     fetch('/api/ai/providers')
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then(setAvailability)
@@ -34,6 +48,49 @@ export default function Settings() {
 
       <ScrollArea className="flex-1">
         <div className="max-w-3xl mx-auto w-full p-8 space-y-10">
+          <section className="space-y-4">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-xl font-bold mb-1">Local render engine</h2>
+                <p className="text-sm text-muted-foreground">The browser talks only to <span className="font-mono">{LOCAL_ENGINE_ORIGIN}</span> for media processing.</p>
+              </div>
+              <Button data-testid="button-check-engine" variant="outline" onClick={() => void checkEngine()} disabled={engine.status === 'checking'}><RefreshCw className={`w-4 h-4 mr-2 ${engine.status === 'checking' ? 'animate-spin' : ''}`} />Check</Button>
+            </div>
+            <div data-testid="status-engine-health" className={`bg-card border rounded-xl p-5 ${engine.status === 'connected' ? 'border-emerald-400/30' : engine.status === 'disconnected' ? 'border-destructive/30' : 'border-border'}`}>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold capitalize">{engine.status}</span>
+                {engine.version && <span className="text-xs font-mono text-muted-foreground">v{engine.version}</span>}
+              </div>
+              {engine.status === 'connected' ? (
+                <div className="grid grid-cols-2 gap-3 mt-4 text-xs">
+                  <div className="rounded-lg bg-background border border-border p-3"><span className="text-muted-foreground">GPU / encoder</span><p className="font-medium mt-1">{engine.gpu?.available ? engine.gpu.name ?? 'CUDA available' : 'CPU fallback'}</p><p className="text-muted-foreground mt-1">{engine.gpu?.nvencAvailable ? `NVENC available${engine.gpu.selectedEncoder ? ` · selected: ${engine.gpu.selectedEncoder}` : ''}` : 'NVENC unavailable'}</p></div>
+                  <div className="rounded-lg bg-background border border-border p-3"><span className="text-muted-foreground">Whisper</span><p className="font-medium mt-1">{engine.whisper?.available ? engine.whisper.model ?? 'Ready' : 'Unavailable'}</p></div>
+                </div>
+              ) : (
+                <div className="mt-3 text-xs text-muted-foreground leading-relaxed">
+                  <p>{engine.error ?? 'Checking the engine…'}</p>
+                  {engine.status === 'disconnected' && <p className="mt-2">Install and start the Local Editing Engine, allow localhost access in your browser, then click Check. Analysis and MP4 export will remain disabled rather than simulate success.</p>}
+                </div>
+              )}
+            </div>
+            <div className="bg-card border border-border rounded-xl p-5 space-y-3">
+              <div>
+                <h3 className="font-semibold text-sm">Pair this browser</h3>
+                <p className="text-xs text-muted-foreground mt-1">Run <span className="font-mono">run.ps1</span> on the laptop, then copy the pairing token it prints into this field. The token is stored only in this browser and is never displayed after entry.</p>
+              </div>
+              <input
+                data-testid="input-pairing-token"
+                type="password"
+                autoComplete="off"
+                value={settings.pairingToken}
+                onChange={(event) => updateSettings(() => ({ pairingToken: event.target.value }))}
+                placeholder="Paste pairing token"
+                className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <p data-testid="status-pairing" className="text-xs text-muted-foreground">{settings.pairingToken ? 'Pairing token saved locally. Click Check to test engine connectivity.' : 'No pairing token saved. Media uploads and jobs are blocked.'}</p>
+            </div>
+          </section>
+
           <section className="space-y-6">
             <div>
               <h2 className="text-xl font-bold mb-1">Execution Mode</h2>
@@ -76,11 +133,13 @@ export default function Settings() {
               <div className="grid grid-cols-2 gap-3 text-xs">
                 {(['gemini', 'openrouter'] as const).map((provider) => {
                   const ready = availability?.[provider] ?? false;
-                  return <div key={provider} className="rounded-lg border border-border bg-background p-3 flex items-center gap-2">
-                    {ready ? <CircleCheck className="w-4 h-4 text-emerald-400" /> : <CircleX className="w-4 h-4 text-muted-foreground" />}
-                    <span className="capitalize">{provider}</span>
-                    <span className="ml-auto text-muted-foreground">{availability === null ? 'Checking…' : ready ? 'Ready' : 'Not configured'}</span>
-                  </div>;
+                  return (
+                    <div key={provider} className="rounded-lg border border-border bg-background p-3 flex items-center gap-2">
+                      {ready ? <CircleCheck className="w-4 h-4 text-emerald-400" /> : <CircleX className="w-4 h-4 text-muted-foreground" />}
+                      <span className="capitalize">{provider}</span>
+                      <span className="ml-auto text-muted-foreground">{availability === null ? 'Checking…' : ready ? 'Ready' : 'Not configured'}</span>
+                    </div>
+                  );
                 })}
               </div>
 

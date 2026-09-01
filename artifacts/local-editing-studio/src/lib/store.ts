@@ -19,6 +19,8 @@ export type Take = {
   notes: string;
   selected: boolean;
   rating: 1 | 2 | 3 | 4 | 5;
+  score?: number;
+  reasons: string[];
   edit?: {
     styleProfileId: string;
     role: 'a-roll' | 'b-roll';
@@ -42,8 +44,22 @@ export type ProjectState = {
   takes: Take[];
   timeline: TimelineItem[];
   versions: { id: string; name: string; timeline: TimelineItem[]; createdAt: number; styleProfileId?: string }[];
+  transcript: {
+    text: string;
+    language?: string;
+    words: { word: string; start: number; end: number; confidence?: number; assetId?: string }[];
+  } | null;
 };
 
+export type JobMetadata = {
+  id: string;
+  type: 'analysis' | 'render';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  stage?: string;
+  error?: string;
+  updatedAt: number;
+};
 export type CustomStyleProfile = {
   id: string;
   name: string;
@@ -61,12 +77,14 @@ export type SettingsState = {
   privacyMode: 'local' | 'hybrid';
   modelProvider: 'none' | 'gemini' | 'openrouter';
   styleProfile: string;
+  pairingToken: string;
   customProfiles: CustomStyleProfile[];
 };
 
 export type AppState = {
   project: ProjectState;
   settings: SettingsState;
+  engine: EngineState;
 };
 
 const defaultState: AppState = {
@@ -78,12 +96,21 @@ const defaultState: AppState = {
     takes: [],
     timeline: [],
     versions: [],
+    transcript: null,
   },
   settings: {
     privacyMode: 'local',
     modelProvider: 'none',
     styleProfile: 'cinematic',
+    pairingToken: '',
     customProfiles: [],
+  },
+  engine: {
+    status: 'unknown',
+    analysisJob: null,
+    renderJob: null,
+    uploadedMedia: {},
+    exportResult: null,
   },
 };
 
@@ -100,14 +127,29 @@ class Store {
         this.state = {
           ...defaultState,
           ...parsed,
-          project: { ...defaultState.project, ...parsed.project },
+          project: {
+            ...defaultState.project,
+            ...parsed.project,
+            assets: parsed.project?.assets ?? [],
+            takes: (parsed.project?.takes ?? []).map((take) => ({ ...take, reasons: take.reasons ?? (take.notes ? [take.notes] : []) })),
+            timeline: parsed.project?.timeline ?? [],
+            versions: parsed.project?.versions ?? [],
+            transcript: parsed.project?.transcript ?? null,
+          },
           settings: {
             privacyMode: parsedSettings?.privacyMode === 'hybrid' ? 'hybrid' : 'local',
             modelProvider: ['none', 'gemini', 'openrouter'].includes(parsedSettings?.modelProvider ?? '')
               ? parsedSettings?.modelProvider as SettingsState['modelProvider'] ?? 'none'
               : 'none',
             styleProfile: parsedSettings?.styleProfile || defaultState.settings.styleProfile,
+            pairingToken: typeof parsedSettings?.pairingToken === 'string' ? parsedSettings.pairingToken : '',
             customProfiles: Array.isArray(parsedSettings?.customProfiles) ? parsedSettings.customProfiles : [],
+          },
+          engine: {
+            ...defaultState.engine,
+            ...parsed.engine,
+            status: 'unknown',
+            uploadedMedia: parsed.engine?.uploadedMedia ?? {},
           },
         };
       } catch {
@@ -162,6 +204,32 @@ export const updateSettings = (fn: (settings: SettingsState) => Partial<Settings
   }));
 };
 
+export const updateEngine = (fn: (engine: EngineState) => Partial<EngineState>) => {
+  store.setState((state) => ({
+    ...state,
+    engine: { ...state.engine, ...fn(state.engine) },
+  }));
+};
 export const clearStore = () => {
   store.setState(() => defaultState);
+};
+
+export type EngineState = {
+  status: 'unknown' | 'checking' | 'connected' | 'disconnected';
+  version?: string;
+  gpu?: { available: boolean; name?: string; nvencAvailable?: boolean; selectedEncoder?: string };
+  whisper?: { available: boolean; model?: string };
+  lastCheckedAt?: number;
+  error?: string;
+  analysisJob: JobMetadata | null;
+  renderJob: JobMetadata | null;
+  uploadedMedia: Record<string, string>;
+  exportResult: {
+    jobId: string;
+    mp4Url: string;
+    srtUrl: string;
+    jsonUrl: string;
+    fileName?: string;
+    completedAt: number;
+  } | null;
 };

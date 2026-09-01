@@ -1,0 +1,1 @@
+- [Securing browser-to-loopback services](browser-loopback-security.md) — Require local pairing auth; CORS origin checks alone do not protect a desktop localhost processor.

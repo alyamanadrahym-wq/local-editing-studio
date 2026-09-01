@@ -155,6 +155,31 @@ export default function Studio() {
                     </div>
                   )}
 
+                  {project.transcript && (
+                    <div data-testid="text-word-transcript" className="space-y-2 pt-3 border-t border-border">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Timed transcript</h3>
+                        <span className="text-[10px] font-mono text-muted-foreground">{project.transcript.words.length} words</span>
+                      </div>
+                      <div className="flex flex-wrap gap-x-1.5 gap-y-1 text-xs leading-relaxed">
+                        {project.transcript.words.map((word, index) => (
+                          <button
+                            data-testid={`button-transcript-word-${index}`}
+                            key={`${word.start}-${index}`}
+                            title={`${word.start.toFixed(2)}s – ${word.end.toFixed(2)}s`}
+                            onClick={() => {
+                              const matching = project.takes.find((take) => word.assetId ? take.assetId === word.assetId && word.start >= take.start && word.start <= take.end : word.start >= take.start && word.start <= take.end);
+                              if (matching) selectTake(matching);
+                            }}
+                            className="text-muted-foreground hover:text-primary transition-colors"
+                          >
+                            {word.word}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Timeline Plan</h3>
@@ -280,13 +305,22 @@ export default function Studio() {
                               {Array.from({ length: 5 }).map((_, star) => <div key={star} className={`w-1.5 h-1.5 rounded-full ${star < take.rating ? 'bg-primary' : 'bg-muted'}`} />)}
                             </div>
                           </div>
-                          <div className="text-xs text-muted-foreground line-clamp-2 mb-2">{take.notes}</div>
+                          <div className="text-xs text-muted-foreground mb-2">{take.notes}</div>
                           {take.edit && (
                             <div className="flex flex-wrap gap-1 mb-2">
                               <Badge variant="outline" className="text-[9px] h-4 px-1">{take.edit.role.toUpperCase()}</Badge>
                               {take.edit.caption && <Badge variant="outline" className="text-[9px] h-4 px-1">CAPTION</Badge>}
                               {take.edit.zoomScale > 1 && <Badge variant="outline" className="text-[9px] h-4 px-1">ZOOM {take.edit.zoomScale.toFixed(2)}×</Badge>}
                             </div>
+                          )}
+                          {take.reasons.length > 0 && (
+                            <ul data-testid={`list-take-reasons-${take.id}`} className="space-y-1 mb-3">
+                              {take.reasons.map((reason, reasonIndex) => (
+                                <li key={`${reason}-${reasonIndex}`} className="text-[10px] text-muted-foreground flex gap-1.5">
+                                  <CheckCircle2 className="w-3 h-3 text-primary shrink-0" /> {reason}
+                                </li>
+                              ))}
+                            </ul>
                           )}
                           <div className="flex justify-between items-center text-[10px] font-mono text-muted-foreground/80">
                             <span>{formatTime(take.start)} – {formatTime(take.end)}</span>
