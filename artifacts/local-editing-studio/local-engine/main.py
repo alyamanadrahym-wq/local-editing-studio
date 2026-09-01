@@ -442,21 +442,30 @@ def nvenc_status() -> dict[str, Any]:
             _nvenc_cache = {"checked_at": time.monotonic(), "usable": False,
                             "error": "ffmpeg was not found"}
             return dict(_nvenc_cache)
+        probe_fd, probe_name = tempfile.mkstemp(prefix="nvenc-probe-", suffix=".mp4")
+        os.close(probe_fd)
+        probe_path = Path(probe_name)
         try:
             result = subprocess.run(
                 [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin",
-                 "-f", "lavfi", "-i", "color=c=black:s=64x64:r=1", "-frames:v", "1",
-                 "-c:v", "h264_nvenc", "-f", "null", "-"],
+                 "-y", "-f", "lavfi", "-i", "color=c=black:s=320x180:r=30",
+                 "-frames:v", "1", "-vf", "format=yuv420p",
+                 "-c:v", "h264_nvenc", "-preset", "p5", "-f", "mp4", str(probe_path)],
                 capture_output=True, text=True, timeout=15,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
+            usable = result.returncode == 0 and probe_path.stat().st_size > 0
             _nvenc_cache = {
-                "checked_at": time.monotonic(), "usable": result.returncode == 0,
-                "error": None if result.returncode == 0 else
-                "\n".join((result.stderr or result.stdout).strip().splitlines()[-5:]),
+                "checked_at": time.monotonic(), "usable": usable,
+                "error": None if usable else (
+                    "\n".join((result.stderr or result.stdout).strip().splitlines()[-5:])
+                    or "NVENC probe did not produce an MP4 file"
+                ),
             }
         except (OSError, subprocess.SubprocessError) as exc:
             _nvenc_cache = {"checked_at": time.monotonic(), "usable": False, "error": str(exc)}
+        finally:
+            probe_path.unlink(missing_ok=True)
         return dict(_nvenc_cache)
 
 
