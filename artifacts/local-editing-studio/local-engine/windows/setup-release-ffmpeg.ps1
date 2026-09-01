@@ -1,4 +1,9 @@
 $ErrorActionPreference = "Stop"
+trap {
+  $message = $_.Exception.Message.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
+  Write-Host "::error title=FFmpeg setup failed::$message"
+  exit 1
+}
 
 $version = "7.1.1"
 $url = "https://github.com/GyanD/codexffmpeg/releases/download/7.1.1/ffmpeg-7.1.1-essentials_build.zip"
