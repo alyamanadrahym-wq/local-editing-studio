@@ -188,7 +188,8 @@ def test_rtx_cuda_transcription_and_nvenc_export_when_available(installed_asset:
         asset_ids=[installed_asset], model=os.environ.get("WHISPER_MODEL", "tiny"),
         language="auto", device="cuda",
     ))
-    assert main.registry.read(analysis_id)["status"] == "completed"
+    analysis_job = main.registry.read(analysis_id)
+    assert analysis_job["status"] == "completed", analysis_job
     render_id, render = _render(installed_asset, "h264_nvenc", "h264_nvenc")
     _assert_render_contract(
         render_id, render, "h264_nvenc", "h264_nvenc", installed_asset
