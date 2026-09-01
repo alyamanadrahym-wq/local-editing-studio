@@ -23,19 +23,26 @@ jobs:
         working-directory: artifacts/local-editing-studio/local-engine
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: artifacts/local-editing-studio/local-engine/requirements.txt
+
       - name: Install pinned release FFmpeg
         shell: powershell
         run: .\windows\setup-release-ffmpeg.ps1
+
       - name: Install engine
         shell: powershell
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          $sitePackages = python -c "import site; print(site.getsitepackages()[0])"
+          Get-ChildItem $sitePackages -Recurse -File -Include *.pyd,*.dll `
+            -ErrorAction SilentlyContinue | Unblock-File
+
       - name: Run real Windows release suite
         shell: powershell
         env:
@@ -52,22 +59,29 @@ jobs:
         working-directory: artifacts/local-editing-studio/local-engine
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: artifacts/local-editing-studio/local-engine/requirements.txt
+
       - name: Install pinned release FFmpeg
         shell: powershell
         run: .\windows\setup-release-ffmpeg.ps1
+
       - name: Install engine and verify RTX runner prerequisites
         shell: powershell
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
+          $sitePackages = python -c "import site; print(site.getsitepackages()[0])"
+          Get-ChildItem $sitePackages -Recurse -File -Include *.pyd,*.dll `
+            -ErrorAction SilentlyContinue | Unblock-File
           Get-Command ffmpeg
           Get-Command ffprobe
           Get-Command nvidia-smi
+
       - name: Run real RTX release suite
         shell: powershell
         env:
@@ -85,6 +99,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+
       - name: Create qualified GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
