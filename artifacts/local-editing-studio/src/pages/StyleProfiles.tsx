@@ -1,7 +1,13 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState, type ChangeEvent, type MouseEvent } from 'react';
 import { useStore, updateSettings, type CustomStyleProfile } from '@/lib/store';
+import {
+  aggregateStyleAnalyses,
+  analyzeStyleFile,
+  type AggregateStyleAnalysis,
+  type FileStyleAnalysis,
+} from '@/lib/style-analyzer';
 import { Button } from '@/components/ui/button';
-import { LayoutTemplate, CheckCircle2, Upload, Video, Info, Settings2, Trash2 } from 'lucide-react';
+import { LayoutTemplate, CheckCircle2, Upload, Video, Info, Settings2, Trash2, ShieldCheck, AlertCircle } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
@@ -35,69 +41,46 @@ const defaultProfiles = [
   }
 ];
 
-function readDuration(file: File): Promise<number | undefined> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const element = document.createElement('video');
-    element.preload = 'metadata';
-    element.onloadedmetadata = () => {
-      URL.revokeObjectURL(url);
-      resolve(Number.isFinite(element.duration) ? element.duration : undefined);
-    };
-    element.onerror = () => {
-      URL.revokeObjectURL(url);
-      resolve(undefined);
-    };
-    element.src = url;
-  });
-}
-
-function analyzeVideoLocally(file: File, duration?: number): CustomStyleProfile['traits'] {
-  const sizeMb = file.size / (1024 * 1024);
-  const isShort = duration && duration < 60;
-  const isLarge = sizeMb > 100;
-  
-  return {
-    cuttingPace: isShort ? 'Fast' : (isLarge ? 'Slow' : 'Moderate'),
-    bRollDensity: isLarge ? 'High' : 'Moderate',
-    captions: !!isShort,
-    zoom: !!isShort,
-  };
-}
-
 export default function StyleProfiles() {
   const settings = useStore((s) => s.settings);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [draftProfile, setDraftProfile] = useState<{ name: string; sourceCount: number; traits: CustomStyleProfile['traits'] } | null>(null);
+  const [analysisStatus, setAnalysisStatus] = useState('');
+  const [analysisError, setAnalysisError] = useState('');
+  const [draftProfile, setDraftProfile] = useState<{
+    name: string;
+    analysis: AggregateStyleAnalysis;
+  } | null>(null);
 
-  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files ?? []);
     if (files.length === 0) return;
 
     setIsAnalyzing(true);
-    const analyses = await Promise.all(files.map(async (file) => {
-      const duration = await readDuration(file);
-      return analyzeVideoLocally(file, duration);
-    }));
-    const rank = ['Slow', 'Moderate', 'Fast'];
-    const densityRank = ['Low', 'Moderate', 'High'];
-    const traits: CustomStyleProfile['traits'] = {
-      cuttingPace: rank[Math.round(analyses.reduce((sum, item) => sum + rank.indexOf(item.cuttingPace), 0) / analyses.length)],
-      bRollDensity: densityRank[Math.round(analyses.reduce((sum, item) => sum + densityRank.indexOf(item.bRollDensity), 0) / analyses.length)],
-      captions: analyses.filter((item) => item.captions).length >= analyses.length / 2,
-      zoom: analyses.filter((item) => item.zoom).length >= analyses.length / 2,
-    };
-    
-    setDraftProfile({
-      name: files.length === 1 ? files[0].name.replace(/\.[^/.]+$/, "") + " Style" : `My ${files.length}-video Style`,
-      sourceCount: files.length,
-      traits
-    });
-    
-    setIsAnalyzing(false);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    setAnalysisError('');
+    const analyses: FileStyleAnalysis[] = [];
+    const failures: string[] = [];
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        setAnalysisStatus(`Sampling video ${index + 1} of ${files.length}: ${files[index].name}`);
+        try {
+          analyses.push(await analyzeStyleFile(files[index]));
+        } catch (error) {
+          failures.push(`${files[index].name}: ${error instanceof Error ? error.message : 'Could not analyze file.'}`);
+        }
+      }
+      if (!analyses.length) throw new Error(failures.join(' '));
+      setDraftProfile({
+        name: files.length === 1 ? files[0].name.replace(/\.[^/.]+$/, '') + ' Style' : `My ${files.length}-video Style`,
+        analysis: aggregateStyleAnalyses(analyses),
+      });
+      if (failures.length) setAnalysisError(failures.join(' '));
+    } catch (error) {
+      setAnalysisError(error instanceof Error ? error.message : 'The selected videos could not be analyzed.');
+    } finally {
+      setAnalysisStatus('');
+      setIsAnalyzing(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -107,9 +90,15 @@ export default function StyleProfiles() {
     const newProfile: CustomStyleProfile = {
       id: crypto.randomUUID(),
       name: draftProfile.name || 'Untitled Style',
-      description: 'Custom style inferred locally from reference video metadata.',
-      tags: ['Custom', draftProfile.traits.cuttingPace + ' Pace', draftProfile.traits.bRollDensity + ' B-Roll'],
-      traits: draftProfile.traits
+      description: `Custom style inferred in this browser from sampled frames and audio across ${draftProfile.analysis.files.length} reference video${draftProfile.analysis.files.length === 1 ? '' : 's'}.`,
+      tags: ['Custom', draftProfile.analysis.traits.cuttingPace + ' Pace', draftProfile.analysis.traits.bRollDensity + ' B-Roll'],
+      traits: draftProfile.analysis.traits,
+      inference: {
+        sourceCount: draftProfile.analysis.files.length,
+        analyzedAt: Date.now(),
+        privacy: 'browser-local',
+        evidence: draftProfile.analysis.evidence,
+      },
     };
 
     updateSettings((s) => ({
@@ -120,7 +109,28 @@ export default function StyleProfiles() {
     setDraftProfile(null);
   };
 
-  const deleteProfile = (id: string, e: React.MouseEvent) => {
+  const setReviewedTrait = (
+    key: keyof CustomStyleProfile['traits'],
+    value: CustomStyleProfile['traits'][keyof CustomStyleProfile['traits']],
+  ) => {
+    setDraftProfile((current) => current ? {
+      ...current,
+      analysis: {
+        ...current.analysis,
+        traits: { ...current.analysis.traits, [key]: value },
+        evidence: {
+          ...current.analysis.evidence,
+          [key]: {
+            confidence: 100,
+            source: 'Manual review',
+            detail: 'Adjusted by you after reviewing the browser-local analysis.',
+          },
+        },
+      },
+    } : null);
+  };
+
+  const deleteProfile = (id: string, e: MouseEvent) => {
     e.stopPropagation();
     updateSettings((s) => {
       const remaining = s.customProfiles.filter(p => p.id !== id);
@@ -131,7 +141,15 @@ export default function StyleProfiles() {
     });
   };
 
-  const allProfiles = [
+  const allProfiles: Array<{
+    id: string;
+    name: string;
+    description: string;
+    tags: string[];
+    isCustom: boolean;
+    traits: CustomStyleProfile['traits'] | null;
+    inference?: CustomStyleProfile['inference'];
+  }> = [
     ...defaultProfiles.map(p => ({ ...p, isCustom: false, traits: null })),
     ...settings.customProfiles.map(p => ({
       ...p,
@@ -148,6 +166,7 @@ export default function StyleProfiles() {
         multiple
         className="hidden"
         onChange={handleFileChange}
+        data-testid="input-reference-videos"
       />
       
       <header className="h-14 border-b border-border flex items-center px-6 justify-between bg-card shrink-0">
@@ -173,14 +192,19 @@ export default function StyleProfiles() {
                 <Video className="w-5 h-5 text-primary mt-0.5" />
                 <div>
                   <h3 className="text-sm font-semibold">Clone a Style</h3>
-                  <p className="text-xs text-muted-foreground mt-1">Analyze a local video to infer its editing traits. No cloud upload required.</p>
+                  <p className="text-xs text-muted-foreground mt-1">Sample real frames and audio to infer editing traits.</p>
                 </div>
+              </div>
+              <div className="flex gap-2 items-start rounded-lg border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs text-muted-foreground">
+                <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+                <span><strong className="text-foreground">Private by design:</strong> processing stays in this browser. No video, frame, or audio data is uploaded or sent over the network.</span>
               </div>
               <Button 
                 onClick={() => fileInputRef.current?.click()} 
                 disabled={isAnalyzing}
                 className="w-full gap-2 mt-1"
                 variant="secondary"
+                data-testid="button-select-reference-videos"
               >
                 {isAnalyzing ? (
                   <div className="flex items-center gap-2">
@@ -194,6 +218,15 @@ export default function StyleProfiles() {
                   </>
                 )}
               </Button>
+              {analysisStatus && (
+                <p className="truncate text-xs text-muted-foreground" data-testid="status-local-analysis">{analysisStatus}</p>
+              )}
+              {analysisError && (
+                <div className="flex items-start gap-2 text-xs text-destructive" data-testid="status-analysis-error">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>{analysisError}</span>
+                </div>
+              )}
             </div>
           </div>
 
@@ -240,11 +273,34 @@ export default function StyleProfiles() {
                   </p>
                   
                   {isCustom && profile.traits && (
-                    <div className="grid grid-cols-2 gap-2 mb-4 p-3 bg-background/50 rounded-lg border border-border/50 text-xs">
-                      <div className="flex items-center gap-1.5"><Settings2 className="w-3.5 h-3.5 text-muted-foreground"/> <span className="text-muted-foreground">Pace:</span> <span className="font-medium">{profile.traits.cuttingPace}</span></div>
-                      <div className="flex items-center gap-1.5"><Settings2 className="w-3.5 h-3.5 text-muted-foreground"/> <span className="text-muted-foreground">B-Roll:</span> <span className="font-medium">{profile.traits.bRollDensity}</span></div>
-                      <div className="flex items-center gap-1.5"><Settings2 className="w-3.5 h-3.5 text-muted-foreground"/> <span className="text-muted-foreground">Captions:</span> <span className="font-medium">{profile.traits.captions ? 'Yes' : 'No'}</span></div>
-                      <div className="flex items-center gap-1.5"><Settings2 className="w-3.5 h-3.5 text-muted-foreground"/> <span className="text-muted-foreground">Zoom:</span> <span className="font-medium">{profile.traits.zoom ? 'Yes' : 'No'}</span></div>
+                    <div className="mb-4 space-y-2 rounded-lg border border-border/50 bg-background/50 p-3 text-xs">
+                      {[
+                        ['cuttingPace', 'Pace', profile.traits.cuttingPace],
+                        ['bRollDensity', 'B-Roll', profile.traits.bRollDensity],
+                        ['captions', 'Captions', profile.traits.captions ? 'Yes' : 'No'],
+                        ['zoom', 'Zoom', profile.traits.zoom ? 'Yes' : 'No'],
+                        ['audioActivity', 'Audio', profile.traits.audioActivity ?? 'Unknown'],
+                      ].map(([key, label, value]) => {
+                        const item = profile.inference?.evidence[key as string];
+                        return (
+                          <div key={key} className="flex items-start gap-2" data-testid={`evidence-${key}-${profile.id}`}>
+                            <Settings2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground"/>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex justify-between gap-2">
+                                <span><span className="text-muted-foreground">{label}:</span> <span className="font-medium">{value}</span></span>
+                                {item && <span className="shrink-0 font-medium text-primary">{item.confidence}%</span>}
+                              </div>
+                              {item && <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{item.source} · {item.detail}</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {profile.inference && (
+                        <div className="flex items-center gap-1.5 border-t border-border/50 pt-2 text-[11px] text-emerald-600">
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                          Browser-local evidence from {profile.inference.sourceCount} file{profile.inference.sourceCount === 1 ? '' : 's'}
+                        </div>
+                      )}
                     </div>
                   )}
                   
@@ -263,16 +319,16 @@ export default function StyleProfiles() {
       </ScrollArea>
 
       <Dialog open={!!draftProfile} onOpenChange={(open) => !open && setDraftProfile(null)}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Inferred Style Traits</DialogTitle>
             <DialogDescription>
-              A local estimate from {draftProfile?.sourceCount ?? 0} reference video{draftProfile?.sourceCount === 1 ? '' : 's'}. Review and edit it before saving.
+              Aggregated from sampled frames and audio in {draftProfile?.analysis.files.length ?? 0} reference video{draftProfile?.analysis.files.length === 1 ? '' : 's'}. Review before saving.
             </DialogDescription>
           </DialogHeader>
           
           {draftProfile && (
-            <div className="space-y-6 py-4">
+            <div className="space-y-5 py-3">
               <div className="space-y-2">
                 <Label htmlFor="profile-name">Profile Name</Label>
                 <Input 
@@ -280,44 +336,92 @@ export default function StyleProfiles() {
                   value={draftProfile.name}
                   onChange={(e) => setDraftProfile({...draftProfile, name: e.target.value})}
                   placeholder="e.g. My Vlog Style"
+                  data-testid="input-style-profile-name"
                 />
               </div>
               
               <div className="space-y-3">
-                <Label>Locally Estimated Traits</Label>
+                <div className="flex items-center justify-between gap-3">
+                  <Label>Locally Estimated Traits</Label>
+                  <Badge variant="outline" className="gap-1 border-emerald-500/30 text-emerald-600">
+                    <ShieldCheck className="h-3 w-3" /> Browser only
+                  </Badge>
+                </div>
                 <div className="grid grid-cols-2 gap-3 bg-muted/30 p-4 rounded-lg border border-border">
                   <div className="space-y-1">
                     <Label htmlFor="cutting-pace" className="text-xs text-muted-foreground uppercase tracking-wider">Cutting Pace</Label>
-                    <select id="cutting-pace" className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm" value={draftProfile.traits.cuttingPace} onChange={(event) => setDraftProfile({...draftProfile, traits: {...draftProfile.traits, cuttingPace: event.target.value}})}>
+                    <select id="cutting-pace" data-testid="select-cutting-pace" className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm" value={draftProfile.analysis.traits.cuttingPace} onChange={(event) => setReviewedTrait('cuttingPace', event.target.value)}>
                       <option>Slow</option><option>Moderate</option><option>Fast</option>
                     </select>
                   </div>
                   <div className="space-y-1">
                     <Label htmlFor="broll-density" className="text-xs text-muted-foreground uppercase tracking-wider">B-Roll Density</Label>
-                    <select id="broll-density" className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm" value={draftProfile.traits.bRollDensity} onChange={(event) => setDraftProfile({...draftProfile, traits: {...draftProfile.traits, bRollDensity: event.target.value}})}>
+                    <select id="broll-density" data-testid="select-broll-density" className="w-full h-9 rounded-md border border-input bg-background px-2 text-sm" value={draftProfile.analysis.traits.bRollDensity} onChange={(event) => setReviewedTrait('bRollDensity', event.target.value)}>
                       <option>Low</option><option>Moderate</option><option>High</option>
                     </select>
                   </div>
                   <div className="flex items-center gap-2 pt-2">
-                    <input id="captions-enabled" type="checkbox" className="h-4 w-4 accent-primary" checked={draftProfile.traits.captions} onChange={(event) => setDraftProfile({...draftProfile, traits: {...draftProfile.traits, captions: event.target.checked}})} />
+                    <input id="captions-enabled" data-testid="checkbox-captions" type="checkbox" className="h-4 w-4 accent-primary" checked={draftProfile.analysis.traits.captions} onChange={(event) => setReviewedTrait('captions', event.target.checked)} />
                     <Label htmlFor="captions-enabled" className="text-sm">Captions</Label>
                   </div>
                   <div className="flex items-center gap-2 pt-2">
-                    <input id="zoom-enabled" type="checkbox" className="h-4 w-4 accent-primary" checked={draftProfile.traits.zoom} onChange={(event) => setDraftProfile({...draftProfile, traits: {...draftProfile.traits, zoom: event.target.checked}})} />
+                    <input id="zoom-enabled" data-testid="checkbox-zoom" type="checkbox" className="h-4 w-4 accent-primary" checked={draftProfile.analysis.traits.zoom} onChange={(event) => setReviewedTrait('zoom', event.target.checked)} />
                     <Label htmlFor="zoom-enabled" className="text-sm">Auto-Zoom</Label>
                   </div>
                 </div>
+
+                <div className="space-y-2">
+                  {[
+                    ['cuttingPace', 'Cutting pace', draftProfile.analysis.traits.cuttingPace],
+                    ['bRollDensity', 'B-roll density', draftProfile.analysis.traits.bRollDensity],
+                    ['captions', 'Caption likelihood', draftProfile.analysis.traits.captions ? 'Detected' : 'Not detected'],
+                    ['zoom', 'Zoom activity', draftProfile.analysis.traits.zoom ? 'Detected' : 'Not detected'],
+                    ['audioActivity', 'Audio activity', draftProfile.analysis.traits.audioActivity ?? 'Unavailable'],
+                  ].map(([key, label, value]) => {
+                    const evidence = draftProfile.analysis.evidence[key as string];
+                    return (
+                      <div key={key} className="rounded-lg border border-border bg-card p-3" data-testid={`aggregate-evidence-${key}`}>
+                        <div className="flex items-center justify-between gap-3 text-sm">
+                          <span className="font-medium">{label}: {value}</span>
+                          <Badge variant="secondary">{evidence.confidence}% confidence</Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground"><strong>{evidence.source}</strong> · {evidence.detail}</p>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Per-file evidence</Label>
+                  {draftProfile.analysis.files.map((file) => (
+                    <div key={file.fileName} className="rounded-lg border border-border bg-muted/20 p-3 text-xs" data-testid={`file-analysis-${file.fileName}`}>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="truncate font-medium">{file.fileName}</span>
+                        <span className="shrink-0 text-muted-foreground">{file.sampledFrames} frames · {Math.round(file.duration)}s</span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                        <span>{file.detectedCuts} likely cuts</span>
+                        <span>Motion {(file.motionScore * 100).toFixed(1)}%</span>
+                        <span>Text-like frames {Math.round(file.textFrameRatio * 100)}%</span>
+                        <span>Zoom score {(file.zoomScore * 100).toFixed(1)}%</span>
+                        <span>Audio {file.audioActivity}{file.audioActiveRatio === undefined ? '' : ` (${Math.round(file.audioActiveRatio * 100)}% active)`}</span>
+                      </div>
+                      {file.warning && <p className="mt-2 text-amber-600">{file.warning}</p>}
+                    </div>
+                  ))}
+                </div>
+
                 <div className="flex gap-2 items-start text-xs text-muted-foreground bg-primary/5 p-3 rounded-lg border border-primary/10">
                   <Info className="w-4 h-4 text-primary shrink-0 mt-0.5" />
-                  <p>These traits were estimated locally without uploading your video. They act as directives for the timeline builder.</p>
+                  <p>Frames are drawn to an in-memory canvas and audio is decoded into memory for sampling. Object URLs are revoked after analysis. No frame, waveform, filename, or media byte is uploaded or sent to a network service.</p>
                 </div>
               </div>
             </div>
           )}
           
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDraftProfile(null)}>Cancel</Button>
-            <Button onClick={handleSaveProfile}>Save Style Profile</Button>
+            <Button variant="outline" onClick={() => setDraftProfile(null)} data-testid="button-cancel-style-profile">Cancel</Button>
+            <Button onClick={handleSaveProfile} data-testid="button-save-style-profile">Save Style Profile</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

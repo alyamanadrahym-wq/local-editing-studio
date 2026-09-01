@@ -70,6 +70,17 @@ export type CustomStyleProfile = {
     bRollDensity: string;
     captions: boolean;
     zoom: boolean;
+    audioActivity?: string;
+  };
+  inference?: {
+    sourceCount: number;
+    analyzedAt: number;
+    privacy: 'browser-local';
+    evidence: Record<string, {
+      confidence: number;
+      source: string;
+      detail: string;
+    }>;
   };
 };
 
@@ -116,6 +127,7 @@ const defaultState: AppState = {
 
 class Store {
   private state: AppState;
+
   private listeners: Set<() => void> = new Set();
 
   constructor() {
@@ -143,7 +155,9 @@ class Store {
               : 'none',
             styleProfile: parsedSettings?.styleProfile || defaultState.settings.styleProfile,
             pairingToken: typeof parsedSettings?.pairingToken === 'string' ? parsedSettings.pairingToken : '',
-            customProfiles: Array.isArray(parsedSettings?.customProfiles) ? parsedSettings.customProfiles : [],
+             customProfiles: Array.isArray(parsedSettings?.customProfiles)
+               ? parsedSettings.customProfiles.filter(isCustomStyleProfile).map(migrateCustomStyleProfile)
+               : [],
           },
           engine: {
             ...defaultState.engine,
@@ -181,6 +195,20 @@ class Store {
   };
 }
 
+function isCustomStyleProfile(value: unknown): value is CustomStyleProfile {
+  if (!value || typeof value !== 'object') return false;
+  const profile = value as Partial<CustomStyleProfile>;
+  const traits = profile.traits as Partial<CustomStyleProfile['traits']> | undefined;
+  return typeof profile.id === 'string'
+    && typeof profile.name === 'string'
+    && typeof profile.description === 'string'
+    && Array.isArray(profile.tags)
+    && !!traits
+    && typeof traits.cuttingPace === 'string'
+    && typeof traits.bRollDensity === 'string'
+    && typeof traits.captions === 'boolean'
+    && typeof traits.zoom === 'boolean';
+}
 const store = new Store();
 
 export function useStore(): AppState;
@@ -233,3 +261,20 @@ export type EngineState = {
     completedAt: number;
   } | null;
 };
+
+function migrateCustomStyleProfile(profile: CustomStyleProfile): CustomStyleProfile {
+  const inference = profile.inference;
+  return {
+    ...profile,
+    tags: profile.tags.filter((tag): tag is string => typeof tag === 'string'),
+    traits: {
+      ...profile.traits,
+      audioActivity: typeof profile.traits.audioActivity === 'string'
+        ? profile.traits.audioActivity
+        : 'Unknown',
+    },
+    inference: inference?.privacy === 'browser-local' && inference.evidence
+      ? inference
+      : undefined,
+  };
+}
