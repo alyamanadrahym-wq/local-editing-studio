@@ -253,8 +253,18 @@ class JobRegistry:
                 stderr_handle.close()
             with self.lock:
                 self.processes.pop(job_id, None)
-            stdout_path.unlink(missing_ok=True)
-            stderr_path.unlink(missing_ok=True)
+            # Windows can retain a terminated process's redirected file handles
+            # for a few scheduler ticks after wait() returns. Retry that transient
+            # sharing violation so cancellation is not reported as a test failure.
+            for log_path in (stdout_path, stderr_path):
+                for attempt in range(20):
+                    try:
+                        log_path.unlink(missing_ok=True)
+                        break
+                    except PermissionError:
+                        if attempt == 19:
+                            raise
+                        time.sleep(0.05)
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         job = self.read(job_id)
