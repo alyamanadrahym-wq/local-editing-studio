@@ -144,6 +144,11 @@ class RenderRequest(BaseModel):
     video_bitrate: str = Field(default="12M", pattern=r"^\d+[kKmM]$")
 
 
+class CleanupRequest(BaseModel):
+    older_than_days: int | None = Field(default=None, ge=1, le=3650)
+    max_bytes: int | None = Field(default=None, ge=0)
+
+
 class JobRegistry:
     def __init__(self) -> None:
         self.lock = threading.RLock()
@@ -270,6 +275,95 @@ class JobCancelled(Exception):
 registry = JobRegistry()
 asset_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 background_tasks: set[asyncio.Task[None]] = set()
+storage_lock = threading.RLock()
+
+ACTIVE_STATUSES = {"queued", "running", "cancelling"}
+
+
+def directory_size(path: Path) -> int:
+    total = 0
+    if not path.exists():
+        return total
+    for item in path.rglob("*"):
+        try:
+            if item.is_file():
+                total += item.stat().st_size
+        except OSError:
+            continue
+    return total
+
+
+def job_asset_ids(folder: Path) -> set[str]:
+    request = load_json(folder / "request.json")
+    found: set[str] = set()
+
+    def visit(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                visit(child, child_key)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child, key)
+        elif isinstance(value, str) and key in {"asset_id", "assetId", "asset_ids"}:
+            if ID_RE.fullmatch(value):
+                found.add(value)
+
+    visit(request)
+    return found
+
+
+def storage_snapshot() -> dict[str, Any]:
+    jobs: list[dict[str, Any]] = []
+    assets: list[dict[str, Any]] = []
+    active_assets: set[str] = set()
+    for folder in JOBS.iterdir():
+        if not folder.is_dir():
+            continue
+        job = load_json(folder / "job.json")
+        if not job:
+            continue
+        asset_ids = job_asset_ids(folder)
+        if job.get("status") in ACTIVE_STATUSES:
+            active_assets.update(asset_ids)
+        jobs.append({
+            "id": folder.name,
+            "kind": job.get("kind"),
+            "status": job.get("status"),
+            "created_at": job.get("created_at"),
+            "updated_at": job.get("updated_at"),
+            "size": directory_size(folder),
+            "asset_ids": sorted(asset_ids),
+            "deletable": job.get("status") not in ACTIVE_STATUSES,
+        })
+    for folder in ASSETS.iterdir():
+        if not folder.is_dir():
+            continue
+        meta = load_json(folder / "metadata.json")
+        assets.append({
+            "id": folder.name,
+            "filename": meta.get("filename") or folder.name,
+            "created_at": meta.get("created_at"),
+            "updated_at": meta.get("updated_at"),
+            "size": directory_size(folder),
+            "in_use": folder.name in active_assets,
+            "deletable": folder.name not in active_assets,
+        })
+    jobs.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    assets.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return {
+        "assets_bytes": sum(item["size"] for item in assets),
+        "jobs_bytes": sum(item["size"] for item in jobs),
+        "total_bytes": sum(item["size"] for item in assets + jobs),
+        "assets": assets,
+        "jobs": jobs,
+    }
+
+
+def parse_timestamp(value: Any) -> float:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0
 
 
 def executable_version(name: str) -> dict[str, Any]:
@@ -745,7 +839,7 @@ app.add_middleware(
     ],
     allow_origin_regex=(
         r"^https?://((localhost|127\.0\.0\.1)(:\d{1,5})?|"
-        r"[a-z0-9-]+\.(replit\.dev|repl\.co))$"
+        r"(?:[a-z0-9-]+\.)+(replit\.dev|repl\.co))$"
     ),
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -791,19 +885,25 @@ def health() -> dict[str, Any]:
 @app.post("/assets/{asset_id}")
 def initialize_asset(asset_id: str, body: AssetInit) -> dict[str, Any]:
     folder = asset_dir(asset_id)
-    existing = load_json(folder / "metadata.json")
-    if existing and not body.overwrite:
-        raise HTTPException(409, "Asset already exists; set overwrite=true to replace it")
-    if body.overwrite and folder.exists():
-        shutil.rmtree(folder)
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "media").write_bytes(b"")
-    meta = {
-        "id": asset_id, "filename": body.filename, "size": body.size,
-        "mime_type": body.mime_type, "received": 0, "complete": body.size == 0,
-        "created_at": utcnow(), "updated_at": utcnow(),
-    }
-    atomic_json(folder / "metadata.json", meta)
+    with storage_lock, asset_locks[asset_id]:
+        existing = load_json(folder / "metadata.json")
+        if existing and not body.overwrite:
+            raise HTTPException(409, "Asset already exists; set overwrite=true to replace it")
+        active_asset_ids = {
+            asset["id"] for asset in storage_snapshot()["assets"] if asset["in_use"]
+        }
+        if body.overwrite and asset_id in active_asset_ids:
+            raise HTTPException(409, "Asset is linked to a running job and cannot be replaced")
+        if body.overwrite and folder.exists():
+            shutil.rmtree(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "media").write_bytes(b"")
+        meta = {
+            "id": asset_id, "filename": body.filename, "size": body.size,
+            "mime_type": body.mime_type, "received": 0, "complete": body.size == 0,
+            "created_at": utcnow(), "updated_at": utcnow(),
+        }
+        atomic_json(folder / "metadata.json", meta)
     return meta
 
 
@@ -825,7 +925,7 @@ async def upload_asset_chunk(
         raise HTTPException(400, "Chunk byte length or range is invalid")
     folder = asset_dir(asset_id)
     path = folder / "media"
-    with asset_locks[asset_id]:
+    with storage_lock, asset_locks[asset_id]:
         meta = load_json(folder / "metadata.json")
         if not meta or not path.exists():
             raise HTTPException(404, "Initialize the asset before uploading bytes")
@@ -856,17 +956,84 @@ def get_asset(asset_id: str) -> dict[str, Any]:
 @app.delete("/assets/{asset_id}")
 def delete_asset(asset_id: str) -> dict[str, bool]:
     folder = asset_dir(asset_id)
-    if not folder.exists():
-        raise HTTPException(404, "Asset not found")
-    shutil.rmtree(folder)
+    with storage_lock, asset_locks[asset_id]:
+        if not folder.exists():
+            raise HTTPException(404, "Asset not found")
+        snapshot = storage_snapshot()
+        asset = next((item for item in snapshot["assets"] if item["id"] == asset_id), None)
+        if asset and asset["in_use"]:
+            raise HTTPException(409, "Asset is linked to a running job and cannot be deleted")
+        shutil.rmtree(folder)
     return {"deleted": True}
+
+
+@app.get("/storage")
+def get_storage() -> dict[str, Any]:
+    with storage_lock:
+        return storage_snapshot()
+
+
+@app.delete("/storage/jobs/{job_id}")
+def delete_stored_job(job_id: str) -> dict[str, bool]:
+    with storage_lock:
+        job = registry.read(job_id)
+        if job.get("status") in ACTIVE_STATUSES:
+            raise HTTPException(409, "A running job cannot be deleted; cancel it first")
+        shutil.rmtree(registry.path(job_id))
+        registry.cancel_events.pop(job_id, None)
+    return {"deleted": True}
+
+
+@app.post("/storage/cleanup")
+def cleanup_storage(body: CleanupRequest) -> dict[str, Any]:
+    if body.older_than_days is None and body.max_bytes is None:
+        raise HTTPException(422, "Choose an age or space limit")
+    with storage_lock:
+        snapshot = storage_snapshot()
+        deleted_jobs: list[str] = []
+        deleted_assets: list[str] = []
+        failures: list[dict[str, str]] = []
+        cutoff = time.time() - body.older_than_days * 86400 if body.older_than_days else None
+
+        candidates: list[tuple[float, str, str, int]] = []
+        for job in snapshot["jobs"]:
+            if job["deletable"]:
+                candidates.append((parse_timestamp(job["updated_at"]), "job", job["id"], job["size"]))
+        for asset in snapshot["assets"]:
+            if asset["deletable"]:
+                candidates.append((parse_timestamp(asset["updated_at"]), "asset", asset["id"], asset["size"]))
+        candidates.sort()
+
+        total = snapshot["total_bytes"]
+        for updated_at, kind, item_id, size in candidates:
+            remove_for_age = cutoff is not None and updated_at < cutoff
+            remove_for_space = body.max_bytes is not None and total > body.max_bytes
+            if not remove_for_age and not remove_for_space:
+                continue
+            folder = registry.path(item_id) if kind == "job" else asset_dir(item_id)
+            try:
+                shutil.rmtree(folder)
+            except OSError as exc:
+                failures.append({"id": item_id, "kind": kind, "error": str(exc)})
+                continue
+            total = max(0, total - size)
+            (deleted_jobs if kind == "job" else deleted_assets).append(item_id)
+        after = storage_snapshot()
+    return {
+        "deleted_jobs": deleted_jobs,
+        "deleted_assets": deleted_assets,
+        "failures": failures,
+        "freed_bytes": max(0, snapshot["total_bytes"] - after["total_bytes"]),
+        "storage": after,
+    }
 
 
 @app.post("/jobs/analysis", status_code=202)
 async def create_analysis_job(body: AnalysisRequest) -> dict[str, Any]:
-    for asset_id in body.asset_ids:
-        asset_meta(asset_id)
-    job_id, _ = registry.create("analysis", body.model_dump())
+    with storage_lock:
+        for asset_id in body.asset_ids:
+            asset_meta(asset_id)
+        job_id, _ = registry.create("analysis", body.model_dump())
     task = asyncio.create_task(execute_job(job_id, "analysis", body))
     background_tasks.add(task)
     task.add_done_callback(background_tasks.discard)
@@ -879,9 +1046,10 @@ async def create_render_job(body: RenderRequest) -> dict[str, Any]:
         timeline = resolve_timeline(body.plan)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    for item in timeline:
-        asset_meta(item["asset_id"])
-    job_id, _ = registry.create("render", body.model_dump())
+    with storage_lock:
+        for item in timeline:
+            asset_meta(item["asset_id"])
+        job_id, _ = registry.create("render", body.model_dump())
     task = asyncio.create_task(execute_job(job_id, "render", body))
     background_tasks.add(task)
     task.add_done_callback(background_tasks.discard)

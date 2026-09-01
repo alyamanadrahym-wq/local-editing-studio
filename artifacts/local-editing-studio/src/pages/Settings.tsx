@@ -1,16 +1,38 @@
 import React, { useEffect, useState } from 'react';
 import { useStore, updateEngine, updateSettings, clearStore } from '@/lib/store';
-import { clearLocalMedia, LOCAL_ENGINE_ORIGIN, localEngine } from '@/lib/local-media';
+import { clearLocalMedia, EngineStorage, LOCAL_ENGINE_ORIGIN, localEngine } from '@/lib/local-media';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router, RefreshCw, CircleCheck, CircleX } from 'lucide-react';
+import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router, RefreshCw, CircleCheck, CircleX, HardDrive } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
   const engine = useStore((state) => state.engine);
   const [availability, setAvailability] = useState<{ gemini: boolean; openrouter: boolean } | null>(null);
+  const [storage, setStorage] = useState<EngineStorage | null>(null);
+  const [storageError, setStorageError] = useState<string>();
+  const [cleanupAge, setCleanupAge] = useState('30');
+  const [cleanupLimit, setCleanupLimit] = useState('20');
+  const [storageBusy, setStorageBusy] = useState(false);
+
+  const formatBytes = (bytes: number) => {
+    if (!bytes) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    return `${(bytes / 1024 ** index).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
+  };
+
+  const loadStorage = async () => {
+    try {
+      setStorageError(undefined);
+      setStorage(await localEngine.getStorage());
+    } catch (error) {
+      setStorage(null);
+      setStorageError(error instanceof Error ? error.message : 'Could not read engine storage.');
+    }
+  };
 
   const checkEngine = async () => {
     localEngine.setPairingToken(settings.pairingToken);
@@ -19,6 +41,7 @@ export default function Settings() {
       const health = await localEngine.health();
       await localEngine.testPairing();
       updateEngine(() => ({ ...health, status: 'connected', error: undefined, lastCheckedAt: Date.now() }));
+      await loadStorage();
     } catch (error) {
       updateEngine(() => ({ status: 'disconnected', error: error instanceof Error ? error.message : 'Local engine is unavailable.', lastCheckedAt: Date.now() }));
     }
@@ -38,6 +61,41 @@ export default function Settings() {
     await clearLocalMedia().catch(() => undefined);
     clearStore();
     window.location.assign(import.meta.env.BASE_URL);
+  };
+
+  const deleteStorageItem = async (type: 'job' | 'asset', id: string, label: string) => {
+    if (!window.confirm(`Permanently delete ${label}? This cannot be undone.`)) return;
+    setStorageBusy(true);
+    try {
+      if (type === 'job') await localEngine.deleteStoredJob(id);
+      else await localEngine.deleteUploadedMedia(id);
+      await loadStorage();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Deletion failed.');
+    } finally {
+      setStorageBusy(false);
+    }
+  };
+
+  const cleanup = async (mode: 'age' | 'space') => {
+    const rule = mode === 'age'
+      ? `files older than ${cleanupAge} days`
+      : `oldest files until storage is at most ${cleanupLimit} GB`;
+    if (!window.confirm(`Clean up ${rule}? Running jobs and their media will be kept. Deleted files cannot be recovered.`)) return;
+    setStorageBusy(true);
+    try {
+      const result = await localEngine.cleanupStorage(mode === 'age'
+        ? { olderThanDays: Number(cleanupAge) }
+        : { maxBytes: Number(cleanupLimit) * 1024 ** 3 });
+      setStorage(result.storage);
+      window.alert(result.failures.length
+        ? `Cleanup finished. Freed ${formatBytes(result.freed_bytes)}, but ${result.failures.length} item(s) could not be deleted because they are in use or locked.`
+        : `Cleanup complete. Freed ${formatBytes(result.freed_bytes)}.`);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : 'Cleanup failed.');
+    } finally {
+      setStorageBusy(false);
+    }
   };
 
   return (
@@ -153,6 +211,38 @@ export default function Settings() {
                 <p className="text-xs text-muted-foreground leading-relaxed">Maximum 20 approved requests per provider per day. Limits remain separate, are never bypassed, and provider failure falls back to the fully local workflow.</p>
               </div>
             </div>
+          </section>
+
+          <section className="space-y-5 pt-6 border-t border-border">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-2"><HardDrive className="w-5 h-5 text-primary" /><div><h2 className="text-xl font-bold">Engine storage</h2><p className="text-sm text-muted-foreground">Manage uploaded media and render results stored on this computer.</p></div></div>
+              <Button variant="outline" size="sm" onClick={() => void loadStorage()} disabled={storageBusy}><RefreshCw className="w-4 h-4 mr-2" />Refresh</Button>
+            </div>
+            {storageError && <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm">{storageError}</div>}
+            {storage && <>
+              <div className="grid grid-cols-3 gap-3">
+                {[['Media', storage.assets_bytes], ['Jobs & renders', storage.jobs_bytes], ['Total', storage.total_bytes]].map(([label, value]) => <div key={String(label)} className="rounded-xl border border-border bg-card p-4"><p className="text-xs text-muted-foreground">{label}</p><p className="text-lg font-semibold mt-1">{formatBytes(Number(value))}</p></div>)}
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+                  <h3 className="font-semibold">Clean by age</h3><p className="text-xs text-muted-foreground">Delete completed jobs and unused media older than this age.</p>
+                  <div className="flex gap-2"><input type="number" min="1" value={cleanupAge} onChange={(e) => setCleanupAge(e.target.value)} className="h-9 w-24 rounded-md border bg-background px-3 text-sm" /><span className="self-center text-sm">days</span><Button className="ml-auto" variant="outline" disabled={storageBusy || Number(cleanupAge) < 1} onClick={() => void cleanup('age')}>Clean up</Button></div>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-5 space-y-3">
+                  <h3 className="font-semibold">Keep under a limit</h3><p className="text-xs text-muted-foreground">Remove the oldest safe items until engine storage fits the limit.</p>
+                  <div className="flex gap-2"><input type="number" min="0" step="1" value={cleanupLimit} onChange={(e) => setCleanupLimit(e.target.value)} className="h-9 w-24 rounded-md border bg-background px-3 text-sm" /><span className="self-center text-sm">GB</span><Button className="ml-auto" variant="outline" disabled={storageBusy || Number(cleanupLimit) < 0} onClick={() => void cleanup('space')}>Apply limit</Button></div>
+                </div>
+              </div>
+              <div className="rounded-xl border border-border bg-card divide-y divide-border">
+                {[...storage.jobs.map((item) => ({ ...item, type: 'job' as const, label: `${item.kind ?? 'Job'} · ${item.status ?? ''}` })), ...storage.assets.map((item) => ({ ...item, type: 'asset' as const, label: item.filename ?? item.id }))].map((item) => (
+                  <div key={`${item.type}-${item.id}`} className="p-4 flex items-center gap-4">
+                    <div className="min-w-0 flex-1"><p className="text-sm font-medium truncate">{item.label}</p><p className="text-xs text-muted-foreground">{formatBytes(item.size)} · {item.updated_at ? new Date(item.updated_at).toLocaleString() : 'Unknown date'}{!item.deletable ? ' · Protected while running' : ''}</p></div>
+                    <Button size="sm" variant="ghost" className="text-destructive" disabled={storageBusy || !item.deletable} onClick={() => void deleteStorageItem(item.type, item.id, item.label)}><Trash2 className="w-4 h-4 mr-2" />Delete</Button>
+                  </div>
+                ))}
+                {storage.jobs.length + storage.assets.length === 0 && <p className="p-6 text-sm text-center text-muted-foreground">No engine files stored.</p>}
+              </div>
+            </>}
           </section>
 
           <section className="space-y-6 pt-6 border-t border-border">

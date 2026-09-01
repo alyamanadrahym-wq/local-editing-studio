@@ -89,6 +89,26 @@ type RawJob = {
   updated_at?: string;
 };
 
+export type StorageItem = {
+  id: string;
+  size: number;
+  created_at?: string;
+  updated_at?: string;
+  deletable: boolean;
+  filename?: string;
+  kind?: 'analysis' | 'render';
+  status?: RawJob['status'];
+  in_use?: boolean;
+};
+
+export type EngineStorage = {
+  assets_bytes: number;
+  jobs_bytes: number;
+  total_bytes: number;
+  assets: StorageItem[];
+  jobs: StorageItem[];
+};
+
 function engineUrl(path: string): string {
   const url = new URL(path, LOCAL_ENGINE_ORIGIN);
   if (url.origin !== LOCAL_ENGINE_ORIGIN) {
@@ -332,6 +352,21 @@ export const localEngine = {
 
   deleteUploadedMedia: (assetId: string) =>
     engineRequest<{ deleted: boolean }>(`/assets/${encodeURIComponent(assetId)}`, { method: 'DELETE' }),
+
+  getStorage: () => engineRequest<EngineStorage>('/storage'),
+
+  deleteStoredJob: (jobId: string) =>
+    engineRequest<{ deleted: boolean }>(`/storage/jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' }),
+
+  cleanupStorage: (rules: { olderThanDays?: number; maxBytes?: number }) =>
+    engineRequest<{ deleted_jobs: string[]; deleted_assets: string[]; failures: { id: string; kind: string; error: string }[]; freed_bytes: number; storage: EngineStorage }>('/storage/cleanup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        older_than_days: rules.olderThanDays,
+        max_bytes: rules.maxBytes,
+      }),
+    }),
 
   download: async (path: string): Promise<Blob> => {
     if (!pairingToken.trim()) throw new Error('Pair the browser with the local engine before downloading output.');

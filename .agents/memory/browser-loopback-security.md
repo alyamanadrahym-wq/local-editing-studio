@@ -7,4 +7,4 @@ A browser-facing service bound to loopback must require an unpredictable, locall
 
 **Why:** A broad hosted-origin allowlist lets unrelated pages from the same hosting platform reach an unauthenticated localhost service. Loopback binding prevents remote socket access but does not stop the user's browser from acting as a deputy.
 
-**How to apply:** Use constant-time credential validation, keep the service on loopback, disable unauthenticated discovery routes, never log the credential in the web client, and require it for uploads, job control, results, downloads, and deletion.
+**How to apply:** Use constant-time credential validation, keep the service on loopback, disable unauthenticated discovery routes, never log the credential in the web client, and require it for uploads, job control, results, downloads, and deletion. Hosted preview origins may contain multiple subdomain labels, so narrowly allow any label depth under the approved platform suffix rather than assuming exactly one label.
