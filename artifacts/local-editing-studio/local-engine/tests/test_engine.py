@@ -60,6 +60,29 @@ def test_completed_analysis_result_contract():
         shutil.rmtree(main.registry.path(job_id), ignore_errors=True)
 
 
+def test_nvenc_probe_encodes_a_realistic_mp4_frame(monkeypatch):
+    class Completed:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command, **_kwargs):
+        assert "color=c=black:s=320x180:r=30" in command
+        assert command[command.index("-vf") + 1] == "format=yuv420p"
+        assert command[command.index("-c:v") + 1] == "h264_nvenc"
+        assert command[command.index("-f") + 1] == "lavfi"
+        assert command[-2] == "mp4"
+        output = main.Path(command[-1])
+        output.write_bytes(b"mp4")
+        return Completed()
+
+    monkeypatch.setattr(main.shutil, "which", lambda _name: "ffmpeg")
+    monkeypatch.setattr(main.subprocess, "run", fake_run)
+    main._nvenc_cache = {"checked_at": 0.0, "usable": False, "error": "Not checked"}
+
+    assert main.nvenc_status()["usable"] is True
+
+
 def test_run_process_uses_files_not_pipes_and_bounds_returned_output(monkeypatch):
     job_id, _ = main.registry.create("render", {})
 
