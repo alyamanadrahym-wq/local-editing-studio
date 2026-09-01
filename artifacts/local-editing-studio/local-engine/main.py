@@ -263,7 +263,11 @@ class JobRegistry:
                         break
                     except PermissionError:
                         if attempt == 19:
-                            raise
+                            # A Windows antivirus/indexer can keep a redirected
+                            # log open after the child has exited. Do not mask
+                            # the process result or cancellation contract; the
+                            # scheduled job cleanup will remove this log later.
+                            break
                         time.sleep(0.05)
 
     def cancel(self, job_id: str) -> dict[str, Any]:
