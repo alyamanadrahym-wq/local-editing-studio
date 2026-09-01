@@ -66,11 +66,17 @@ $bin = $ffmpeg.DirectoryName
 $env:Path = "$bin;$env:Path"
 Add-Content -Path $env:GITHUB_PATH -Value $bin
 
-& $ffmpeg.FullName -version | Select-Object -First 1
+$ffmpegVersionOutput = & $ffmpeg.FullName -version
 if ($LASTEXITCODE -ne 0) {
   throw "Pinned FFmpeg could not start."
 }
-if ((& $ffmpeg.FullName -version | Select-Object -First 1) -notmatch "ffmpeg version 7\.1\.1") {
+$ffmpegVersionLine = $ffmpegVersionOutput | Select-Object -First 1
+Write-Host $ffmpegVersionLine
+if ($ffmpegVersionLine -notmatch "ffmpeg version 7\.1\.1") {
   throw "The selected FFmpeg is not version $version."
 }
-& $ffprobe.FullName -version | Select-Object -First 1
+$ffprobeVersionOutput = & $ffprobe.FullName -version
+if ($LASTEXITCODE -ne 0) {
+  throw "Pinned FFprobe could not start."
+}
+Write-Host ($ffprobeVersionOutput | Select-Object -First 1)
