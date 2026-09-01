@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "1D9F_X_aIzmn6tMqkvu19"
+uri = "file://artifacts/local-editing-studio/local-engine/tests/fixtures/arabic-english-smoke.mp3"
+type = "audio"
+title = "bilingual release smoke sample"
+description = "Text-to-speech audio: مرحبا من استوديو المونتاج المحلي. Hello from the local editing studio."

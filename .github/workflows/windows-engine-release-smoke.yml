@@ -1,0 +1,74 @@
+name: Windows engine release smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  cpu:
+    name: Windows CPU + libx264
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: artifacts/local-editing-studio/local-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: artifacts/local-editing-studio/local-engine/requirements.txt
+      - name: Install engine and FFmpeg
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          choco install ffmpeg --no-progress -y
+      - name: Run real Windows release suite
+        shell: powershell
+        env:
+          WINDOWS_RELEASE_SMOKE: "1"
+          WHISPER_MODEL: tiny
+        run: python -m pytest -q -m windows_release
+
+  rtx:
+    name: Windows RTX + CUDA + NVENC
+    if: ${{ vars.ENABLE_RTX_RELEASE_SMOKE == 'true' }}
+    runs-on: [self-hosted, Windows, X64, RTX]
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: artifacts/local-editing-studio/local-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: artifacts/local-editing-studio/local-engine/requirements.txt
+      - name: Install engine and verify RTX runner prerequisites
+        shell: powershell
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
+            if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
+              throw "ffmpeg is missing and Chocolatey is unavailable on the RTX runner"
+            }
+            choco install ffmpeg --no-progress -y
+          }
+          Get-Command ffmpeg
+          Get-Command ffprobe
+          Get-Command nvidia-smi
+      - name: Run real RTX release suite
+        shell: powershell
+        env:
+          WINDOWS_RELEASE_SMOKE: "1"
+          EXPECT_RTX: "1"
+          WHISPER_MODEL: tiny
+        run: python -m pytest -q -m windows_release

@@ -142,6 +142,7 @@ class RenderRequest(BaseModel):
     height: int = Field(default=1080, ge=240, le=2160)
     fps: int = Field(default=30, ge=1, le=60)
     video_bitrate: str = Field(default="12M", pattern=r"^\d+[kKmM]$")
+    encoder: Literal["auto", "libx264", "h264_nvenc"] = "auto"
 
 
 class CleanupRequest(BaseModel):
@@ -716,7 +717,13 @@ def run_render(job_id: str, request: RenderRequest) -> None:
     output = folder / "output"
     work.mkdir(exist_ok=True)
     try:
-        encoder = "h264_nvenc" if nvenc_status()["usable"] else "libx264"
+        if request.encoder == "h264_nvenc" and not nvenc_status()["usable"]:
+            raise RuntimeError("h264_nvenc was requested but the NVENC encode probe failed")
+        encoder = (
+            request.encoder
+            if request.encoder != "auto"
+            else ("h264_nvenc" if nvenc_status()["usable"] else "libx264")
+        )
         registry.write(job_id, status="running", progress=2, message="Validating edit plan",
                        encoder=encoder)
         timeline = resolve_timeline(request.plan)

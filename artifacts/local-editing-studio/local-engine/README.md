@@ -115,11 +115,12 @@ Content-Type: application/json
   "width":1920,
   "height":1080,
   "fps":30,
-  "video_bitrate":"12M"
+  "video_bitrate":"12M",
+  "encoder":"auto"
 }
 ```
 
-The React store shape is also accepted: put `takes` in the plan with `id`, `assetId`, `start`, and `end`, then timeline items can reference them with `takeId`. Snake-case equivalents are accepted. The engine validates all media ranges, transcodes real video/audio clips, and concatenates them into a standards-compatible H.264/AAC MP4. Timeline `text` or `caption` values become SRT cues; if none exist the SRT is intentionally empty.
+The React store shape is also accepted: put `takes` in the plan with `id`, `assetId`, `start`, and `end`, then timeline items can reference them with `takeId`. Snake-case equivalents are accepted. `encoder` is `auto` (NVENC when its real probe passes, otherwise libx264), `libx264`, or `h264_nvenc`; explicitly requesting unavailable NVENC fails instead of silently claiming GPU output. The engine validates all media ranges, transcodes real video/audio clips, and concatenates them into a standards-compatible H.264/AAC MP4. Timeline `text` or `caption` values become SRT cues; if none exist the SRT is intentionally empty.
 
 ### Poll, results, downloads, and cancellation
 
@@ -143,4 +144,14 @@ From a development virtual environment, run:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-The test suite uses mocks for FFmpeg subprocess behavior and does not download or run a Whisper model.
+Normal tests remain fast and use mocks. Before every tagged release, and weekly, `.github/workflows/windows-engine-release-smoke.yml` runs the `windows_release` suite on `windows-latest`. It downloads the tiny Whisper model, turns the bundled short Arabic/English speech fixture into a test video, verifies both languages and word timestamps, exports and probes MP4/AAC plus Arabic/English SRT and reopenable JSON, and cancels real FFmpeg and Whisper work.
+
+To qualify a particular camera/container combination too, set `WINDOWS_RELEASE_SAMPLE` to another short Arabic/English video before running the suite. Otherwise the checked-in deterministic bilingual fixture is used.
+
+```powershell
+$env:WINDOWS_RELEASE_SMOKE = "1"
+$env:WINDOWS_RELEASE_SAMPLE = "C:\release-fixtures\arabic-english.mp4" # recommended
+.\.venv\Scripts\python.exe -m pytest -q -m windows_release
+```
+
+An optional self-hosted runner labeled `Windows`, `X64`, and `RTX` covers CUDA transcription and a real `h264_nvenc` export. Install a current NVIDIA driver plus the CUDA/cuDNN runtime required by CTranslate2, then set the GitHub Actions repository variable `ENABLE_RTX_RELEASE_SMOKE=true`. The workflow provisions Python, installs the engine dependencies, installs FFmpeg through Chocolatey when needed, and verifies `ffmpeg`, `ffprobe`, and `nvidia-smi` before testing. The RTX job fails if CUDA or the one-frame NVENC probe is unavailable; it never silently passes through the CPU fallback. The CPU job explicitly verifies `libx264` and verifies that `auto` falls back to it when the NVENC probe fails.
