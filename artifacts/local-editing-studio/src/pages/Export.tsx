@@ -1,5 +1,5 @@
 import React from 'react';
-import { useStore, updateProject } from '@/lib/store';
+import { useStore, updateProject, updateSettings, type Take, type TimelineItem } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { MonitorPlay, Download, History, Clock, FileJson2, Captions, RotateCcw, ShieldCheck } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -23,16 +23,19 @@ function toSrtTimestamp(seconds: number): string {
   return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${ms.toString().padStart(3, '0')}`;
 }
 
-function createDraftSrt(script: string): string {
-  const cues = script.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+function createDraftSrt(takes: Take[], timeline: TimelineItem[]): string {
   let cursor = 0;
-  return cues.map((cue, index) => {
-    const wordCount = cue.split(/\s+/).filter(Boolean).length;
-    const duration = Math.max(2, wordCount / 2.5);
-    const block = `${index + 1}\n${toSrtTimestamp(cursor)} --> ${toSrtTimestamp(cursor + duration)}\n${cue}`;
+  const blocks: string[] = [];
+  [...timeline].sort((a, b) => a.order - b.order).forEach((item) => {
+    const take = takes.find((candidate) => candidate.id === item.takeId);
+    if (!take) return;
+    const duration = Math.max(0, take.end - take.start);
+    if (take.edit?.caption) {
+      blocks.push(`${blocks.length + 1}\n${toSrtTimestamp(cursor)} --> ${toSrtTimestamp(cursor + duration)}\n${take.edit.caption}`);
+    }
     cursor += duration;
-    return block;
-  }).join('\n\n');
+  });
+  return blocks.join('\n\n');
 }
 
 export default function Export() {
@@ -42,19 +45,26 @@ export default function Export() {
     const take = project.takes.find((candidate) => candidate.id === item.takeId);
     return sum + (take ? take.end - take.start : 0);
   }, 0);
+  const hasPlannedCaptions = orderedTimeline.some((item) => project.takes.find((take) => take.id === item.takeId)?.edit?.caption);
 
   const saveVersion = () => {
-    updateProject((current) => ({
-      versions: [
-        {
+    updateProject((current) => {
+      const timelineStyleId = current.timeline
+        .map((item) => current.takes.find((take) => take.id === item.takeId)?.edit?.styleProfileId)
+        .find(Boolean);
+      return {
+        versions: [
+          {
           id: crypto.randomUUID(),
           name: `Draft v${current.versions.length + 1}`,
           timeline: current.timeline.map((item) => ({ ...item })),
           createdAt: Date.now(),
-        },
-        ...current.versions,
-      ],
-    }));
+          styleProfileId: timelineStyleId ?? settings.styleProfile,
+          },
+          ...current.versions,
+        ],
+      };
+    });
   };
 
   const restoreVersion = (versionId: string) => {
@@ -64,6 +74,11 @@ export default function Export() {
       timeline: version.timeline.map((item, index) => ({ ...item, order: index })),
       takes: current.takes.map((take) => ({ ...take, selected: version.timeline.some((item) => item.takeId === take.id) })),
     }));
+    const versionStyleId = version.styleProfileId
+      ?? version.timeline.map((item) => project.takes.find((take) => take.id === item.takeId)?.edit?.styleProfileId).find(Boolean);
+    if (versionStyleId) {
+      updateSettings(() => ({ styleProfile: versionStyleId }));
+    }
   };
 
   const exportPlan = () => {
@@ -85,7 +100,7 @@ export default function Export() {
   };
 
   const exportCaptions = () => {
-    downloadFile(`${project.name || 'captions'}.srt`, createDraftSrt(project.script), 'application/x-subrip');
+    downloadFile(`${project.name || 'captions'}.srt`, createDraftSrt(project.takes, project.timeline), 'application/x-subrip');
   };
 
   const formatDate = (ms: number) => new Date(ms).toLocaleDateString(undefined, {
@@ -126,7 +141,7 @@ export default function Export() {
               <Button onClick={exportPlan} disabled={orderedTimeline.length === 0} className="w-full h-12 text-base font-semibold bg-primary text-primary-foreground hover:bg-primary/90 gap-2">
                 <Download className="w-5 h-5" /> Download edit plan
               </Button>
-              <Button onClick={exportCaptions} disabled={!project.script.trim()} variant="outline" className="w-full h-10 gap-2">
+              <Button onClick={exportCaptions} disabled={!hasPlannedCaptions} variant="outline" className="w-full h-10 gap-2">
                 <Captions className="w-4 h-4" /> Download draft captions (.srt)
               </Button>
               <Button onClick={saveVersion} disabled={orderedTimeline.length === 0} variant="ghost" className="w-full h-10 gap-2 text-muted-foreground hover:text-foreground">

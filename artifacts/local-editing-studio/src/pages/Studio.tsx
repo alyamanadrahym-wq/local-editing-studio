@@ -168,6 +168,7 @@ export default function Studio() {
                             <button key={item.id} onClick={() => selectTake(take)} className="w-full text-left flex items-center gap-3 p-2 rounded-md hover:bg-muted/50 transition-colors border border-transparent hover:border-border">
                               <span className="text-xs font-mono text-muted-foreground">{String(index + 1).padStart(2, '0')}</span>
                               <div className="flex-1 truncate text-sm">{takeLabel(take, index)}</div>
+                              {take.edit?.role === 'b-roll' && <Badge variant="secondary" className="text-[9px] h-4 px-1">B-ROLL</Badge>}
                               <span className="text-[10px] font-mono text-muted-foreground">{formatTime(take.end - take.start)}</span>
                             </button>
                           ) : null;
@@ -191,7 +192,8 @@ export default function Studio() {
                   <video
                     ref={videoRef}
                     src={selectedAsset.url}
-                    className="max-h-full max-w-full object-contain"
+                    className="max-h-full max-w-full object-contain transition-transform duration-700"
+                    style={{ transform: `scale(${selectedTake?.edit?.zoomScale ?? 1})` }}
                     playsInline
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
@@ -217,6 +219,12 @@ export default function Studio() {
                 {selectedTake && selectedAsset?.type === 'video' && (
                   <div className="absolute top-4 left-4 rounded-md bg-black/60 border border-white/10 px-2.5 py-1.5 text-[11px] font-mono text-white/80">
                     {formatTime(currentTime)} / {formatTime(selectedTake.end)}
+                  </div>
+                )}
+
+                {selectedTake?.edit?.caption && (
+                  <div className="absolute bottom-20 left-1/2 -translate-x-1/2 max-w-[80%] rounded-md bg-black/75 px-4 py-2 text-center text-sm font-semibold text-white shadow-lg">
+                    {selectedTake.edit.caption}
                   </div>
                 )}
 
@@ -273,6 +281,13 @@ export default function Studio() {
                             </div>
                           </div>
                           <div className="text-xs text-muted-foreground line-clamp-2 mb-2">{take.notes}</div>
+                          {take.edit && (
+                            <div className="flex flex-wrap gap-1 mb-2">
+                              <Badge variant="outline" className="text-[9px] h-4 px-1">{take.edit.role.toUpperCase()}</Badge>
+                              {take.edit.caption && <Badge variant="outline" className="text-[9px] h-4 px-1">CAPTION</Badge>}
+                              {take.edit.zoomScale > 1 && <Badge variant="outline" className="text-[9px] h-4 px-1">ZOOM {take.edit.zoomScale.toFixed(2)}×</Badge>}
+                            </div>
+                          )}
                           <div className="flex justify-between items-center text-[10px] font-mono text-muted-foreground/80">
                             <span>{formatTime(take.start)} – {formatTime(take.end)}</span>
                             {take.selected ? <Badge variant="secondary" className="text-[9px] h-4 px-1 border-primary/20 text-primary">IN SEQUENCE</Badge> : <Button variant="ghost" size="sm" onClick={(event) => { event.stopPropagation(); addToSequence(take); }} className="h-5 px-1.5 text-[10px] gap-1 text-primary"><Plus className="w-3 h-3" /> Use take</Button>}

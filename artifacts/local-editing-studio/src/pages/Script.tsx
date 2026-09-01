@@ -1,11 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
-import { useStore, updateProject, type Take } from '@/lib/store';
+import { useStore, updateProject, updateSettings, type CustomStyleProfile, type Take, type TimelineItem } from '@/lib/store';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Type, Sparkles, Clock, Wand2, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Type, Sparkles, Clock, Wand2, AlertCircle, CheckCircle2, History, GitBranch, Save } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -27,9 +31,15 @@ function normalizeCue(cue: string): string {
     .trim();
 }
 
-function buildLocalPlan(script: string, assetIds: string[], durations: Map<string, number | undefined>): {
+function buildLocalPlan(
+  script: string, 
+  assetIds: string[], 
+  durations: Map<string, number | undefined>,
+  traits: CustomStyleProfile['traits'],
+  styleProfileId: string
+): {
   takes: Take[];
-  timeline: { id: string; takeId: string; order: number }[];
+  timeline: TimelineItem[];
 } {
   const cues = extractCues(script);
   const uniqueCues = new Map<string, { text: string; repeats: number }>();
@@ -40,11 +50,21 @@ function buildLocalPlan(script: string, assetIds: string[], durations: Map<strin
   }
 
   const takes: Take[] = [];
-  const timeline: { id: string; takeId: string; order: number }[] = [];
+  const timeline: TimelineItem[] = [];
   Array.from(uniqueCues.values()).forEach(({ text, repeats }, index) => {
-    const assetId = assetIds[index % assetIds.length];
+    const useBroll = traits.bRollDensity === 'High'
+      ? index % 2 === 1
+      : traits.bRollDensity === 'Moderate' && index > 0 && index % 3 === 0;
+    const assetId = useBroll && assetIds.length > 1 ? assetIds[(index % (assetIds.length - 1)) + 1] : assetIds[0];
     const duration = durations.get(assetId) ?? 12;
-    const clipLength = Math.max(4, Math.min(12, duration));
+    
+    let clipLength = Math.max(4, Math.min(12, duration));
+    if (traits.cuttingPace === 'Fast') {
+      clipLength = Math.max(2, Math.min(6, duration));
+    } else if (traits.cuttingPace === 'Slow') {
+      clipLength = Math.max(6, Math.min(15, duration));
+    }
+
     const start = Math.min(index * 4, Math.max(0, duration - clipLength));
     const end = Math.min(duration, start + clipLength);
     const take: Take = {
@@ -52,11 +72,16 @@ function buildLocalPlan(script: string, assetIds: string[], durations: Map<strin
       assetId,
       start: Number(start.toFixed(2)),
       end: Number(end.toFixed(2)),
-      notes: repeats > 1
-        ? `Repeated cue merged ${repeats} times · “${text.slice(0, 72)}”`
-        : `Available footage window · “${text.slice(0, 72)}”`,
+      notes: `${repeats > 1 ? `Repeated cue merged ${repeats} times` : 'Available footage window'} · “${text.slice(0, 72)}” · ${traits.cuttingPace} pace · ${traits.bRollDensity} B-roll · captions ${traits.captions ? 'on' : 'off'} · zoom ${traits.zoom ? 'on' : 'off'}`,
       selected: true,
       rating: 4,
+      edit: {
+        styleProfileId,
+        role: useBroll ? 'b-roll' : 'a-roll',
+        caption: traits.captions ? text : null,
+        zoomScale: traits.zoom ? Number((1.04 + (index % 3) * 0.03).toFixed(2)) : 1,
+        bRollDensity: traits.bRollDensity,
+      },
     };
     takes.push(take);
     timeline.push({ id: makeId(), takeId: take.id, order: index });
@@ -67,11 +92,16 @@ function buildLocalPlan(script: string, assetIds: string[], durations: Map<strin
 
 export default function Script() {
   const project = useStore((s) => s.project);
+  const settings = useStore((s) => s.settings);
   const [content, setContent] = useState(project.script);
   const [isSaving, setIsSaving] = useState(false);
   const [isPlanning, setIsPlanning] = useState(false);
   const [planReady, setPlanReady] = useState(project.timeline.length > 0);
   const [lastSaved, setLastSaved] = useState<Date>(new Date());
+  
+  const [showSaveVariantDialog, setShowSaveVariantDialog] = useState(false);
+  const [variantName, setVariantName] = useState("");
+
   const saveTimeout = useRef<number | undefined>(undefined);
 
   useEffect(() => {
@@ -100,12 +130,77 @@ export default function Script() {
     setIsPlanning(true);
     window.setTimeout(() => {
       const durations = new Map(project.assets.map((asset) => [asset.id, asset.duration]));
-      const plan = buildLocalPlan(content, project.assets.map((asset) => asset.id), durations);
-      updateProject((current) => ({ takes: plan.takes, timeline: plan.timeline }));
+      const builtInTraits: Record<string, CustomStyleProfile['traits']> = {
+        cinematic: { cuttingPace: 'Slow', bRollDensity: 'Low', captions: false, zoom: false },
+        'fast-social': { cuttingPace: 'Fast', bRollDensity: 'High', captions: true, zoom: true },
+        documentary: { cuttingPace: 'Moderate', bRollDensity: 'High', captions: false, zoom: false },
+        corporate: { cuttingPace: 'Moderate', bRollDensity: 'Moderate', captions: true, zoom: false },
+      };
+      const activeTraits = settings.customProfiles.find((profile) => profile.id === settings.styleProfile)?.traits
+        ?? builtInTraits[settings.styleProfile]
+        ?? builtInTraits.cinematic;
+      const plan = buildLocalPlan(content, project.assets.map((asset) => asset.id), durations, activeTraits, settings.styleProfile);
+      
+      updateProject((current) => ({ 
+        takes: [...current.takes, ...plan.takes], 
+        timeline: plan.timeline 
+      }));
+      
       setIsPlanning(false);
       setPlanReady(true);
-    }, 250);
+    }, 400);
   };
+
+  const handleSaveVariant = () => {
+    if (!variantName.trim()) return;
+    
+    updateProject((current) => {
+      const timelineStyleId = current.timeline
+        .map((item) => current.takes.find((take) => take.id === item.takeId)?.edit?.styleProfileId)
+        .find(Boolean);
+      return {
+        versions: [
+          ...current.versions,
+          {
+          id: makeId(),
+          name: variantName,
+          timeline: current.timeline,
+          createdAt: Date.now(),
+          styleProfileId: timelineStyleId ?? settings.styleProfile,
+          }
+        ]
+      };
+    });
+    
+    setShowSaveVariantDialog(false);
+    setVariantName("");
+  };
+
+  const handleLoadVariant = (versionId: string) => {
+    const version = project.versions.find(v => v.id === versionId);
+    if (!version) return;
+    
+    updateProject(() => ({
+      timeline: version.timeline
+    }));
+    const versionStyleId = version.styleProfileId
+      ?? version.timeline.map((item) => project.takes.find((take) => take.id === item.takeId)?.edit?.styleProfileId).find(Boolean);
+    if (versionStyleId) {
+      updateSettings(() => ({ styleProfile: versionStyleId }));
+    }
+  };
+
+  const handleProfileChange = (val: string) => {
+    updateSettings(() => ({ styleProfile: val }));
+  };
+
+  const allProfiles = [
+    { id: 'cinematic', name: 'Cinematic Narrative' },
+    { id: 'fast-social', name: 'Fast Social (TikTok/Reels)' },
+    { id: 'documentary', name: 'Documentary' },
+    { id: 'corporate', name: 'Corporate Clean' },
+    ...settings.customProfiles
+  ];
 
   return (
     <div className="h-full w-full flex flex-col bg-background">
@@ -122,10 +217,24 @@ export default function Script() {
             </div>
           )}
         </div>
-        <Button variant="outline" size="sm" onClick={runAnalysis} disabled={isPlanning || !content.trim() || project.assets.length === 0} className="h-8 gap-2 group">
-          {isPlanning ? <Clock className="w-4 h-4 animate-spin text-primary" /> : <Sparkles className="w-4 h-4 text-primary group-hover:animate-pulse" />}
-          {isPlanning ? 'Building local plan…' : 'Build local edit plan'}
-        </Button>
+        
+        <div className="flex items-center gap-3">
+          <Select value={settings.styleProfile} onValueChange={handleProfileChange}>
+            <SelectTrigger className="w-[200px] h-8 text-xs bg-background">
+              <SelectValue placeholder="Select style..." />
+            </SelectTrigger>
+            <SelectContent>
+              {allProfiles.map(p => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          <Button variant="outline" size="sm" onClick={runAnalysis} disabled={isPlanning || !content.trim() || project.assets.length === 0} className="h-8 gap-2 group">
+            {isPlanning ? <Clock className="w-4 h-4 animate-spin text-primary" /> : <Sparkles className="w-4 h-4 text-primary group-hover:animate-pulse" />}
+            {isPlanning ? 'Building plan…' : 'Build Plan'}
+          </Button>
+        </div>
       </header>
 
       <div className="flex-1 flex overflow-hidden">
@@ -135,7 +244,22 @@ export default function Script() {
               <p className="text-sm font-medium">Project script</p>
               <p className="text-xs text-muted-foreground mt-1">Use a new line for a beat, or brackets for visual cues.</p>
             </div>
-            {planReady && <Badge variant="outline" className="gap-1.5 border-emerald-400/30 text-emerald-300"><CheckCircle2 className="w-3 h-3" /> Plan ready</Badge>}
+            {planReady && (
+              <div className="flex items-center gap-3">
+                <Badge variant="outline" className="gap-1.5 border-emerald-400/30 text-emerald-300">
+                  <CheckCircle2 className="w-3 h-3" /> Plan ready
+                </Badge>
+                <Button 
+                  variant="secondary" 
+                  size="sm" 
+                  className="h-7 text-xs gap-1.5"
+                  onClick={() => setShowSaveVariantDialog(true)}
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  Save Variant
+                </Button>
+              </div>
+            )}
           </div>
           <div className="bg-card border border-border rounded-xl shadow-sm flex-1 flex flex-col overflow-hidden focus-within:border-primary/50 focus-within:ring-1 focus-within:ring-primary/20 transition-all">
             <Textarea
@@ -176,16 +300,85 @@ export default function Script() {
               </div>
 
               <div className="space-y-2 pt-2 border-t border-border">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Plan preview</h4>
-                <p className="text-xs text-muted-foreground">{cues.length} beats detected · {project.assets.length} local assets available.</p>
-                {project.assets.length === 0 && (
-                  <Link href="/assets"><Button variant="outline" size="sm" className="w-full mt-2">Import footage first</Button></Link>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider flex items-center justify-between">
+                  Plan Variants
+                  <Badge variant="secondary" className="font-mono text-[10px]">{project.versions.length}</Badge>
+                </h4>
+                
+                {project.versions.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No comparison variants saved yet. Build a plan and save it to compare different styles.</p>
+                ) : (
+                  <div className="space-y-2 mt-2">
+                    {project.versions.map(version => (
+                      <div key={version.id} className="p-3 bg-background border border-border rounded-lg group">
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex items-center gap-1.5 font-medium text-sm">
+                            <GitBranch className="w-3.5 h-3.5 text-muted-foreground" />
+                            {version.name}
+                          </div>
+                          <span className="text-[10px] text-muted-foreground">
+                            {new Date(version.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between mt-3">
+                          <span className="text-xs text-muted-foreground">{version.timeline.length} clips</span>
+                          <Button 
+                            variant="secondary" 
+                            size="sm" 
+                            className="h-6 text-[10px] px-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                            onClick={() => handleLoadVariant(version.id)}
+                          >
+                            Load variant
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 )}
+                
+                <div className="pt-4">
+                  <p className="text-xs text-muted-foreground mb-2">{cues.length} beats detected · {project.assets.length} local assets available.</p>
+                  {project.assets.length === 0 && (
+                    <Link href="/assets"><Button variant="outline" size="sm" className="w-full">Import footage first</Button></Link>
+                  )}
+                </div>
               </div>
             </div>
           </ScrollArea>
         </div>
       </div>
+
+      <Dialog open={showSaveVariantDialog} onOpenChange={setShowSaveVariantDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Save Comparison Variant</DialogTitle>
+            <DialogDescription>
+              Save the current timeline to compare different editing styles later.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="variant-name">Variant Name</Label>
+              <Input 
+                id="variant-name" 
+                value={variantName}
+                onChange={(e) => setVariantName(e.target.value)}
+                placeholder="e.g. Fast Paced Version"
+                autoFocus
+              />
+            </div>
+            <div className="text-xs text-muted-foreground">
+              This variant has {project.timeline.length} clips and is locally assembled.
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowSaveVariantDialog(false)}>Cancel</Button>
+            <Button onClick={handleSaveVariant} disabled={!variantName.trim()}>Save Variant</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

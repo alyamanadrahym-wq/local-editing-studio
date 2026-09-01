@@ -196,12 +196,19 @@ export default function Assets() {
                     <p className="text-sm font-medium">Local media bin</p>
                     <p className="text-xs text-muted-foreground mt-1">Drop more files anywhere in this area.</p>
                   </div>
-                  <Link href="/script">
-                    <Button variant="outline" size="sm" className="gap-2">
-                      <Plus className="w-3.5 h-3.5" />
-                      Add a script
-                    </Button>
-                  </Link>
+                  <div className="flex gap-2">
+                    <Link href="/styles">
+                      <Button variant="outline" size="sm" className="gap-2">
+                        Clone a Style
+                      </Button>
+                    </Link>
+                    <Link href="/script">
+                      <Button variant="outline" size="sm" className="gap-2">
+                        <Plus className="w-3.5 h-3.5" />
+                        Add a script
+                      </Button>
+                    </Link>
+                  </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {project.assets.map((asset) => (

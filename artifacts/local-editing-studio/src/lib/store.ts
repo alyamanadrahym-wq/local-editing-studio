@@ -19,6 +19,13 @@ export type Take = {
   notes: string;
   selected: boolean;
   rating: 1 | 2 | 3 | 4 | 5;
+  edit?: {
+    styleProfileId: string;
+    role: 'a-roll' | 'b-roll';
+    caption: string | null;
+    zoomScale: number;
+    bRollDensity: string;
+  };
 };
 
 export type TimelineItem = {
@@ -34,13 +41,27 @@ export type ProjectState = {
   assets: AssetItem[];
   takes: Take[];
   timeline: TimelineItem[];
-  versions: { id: string; name: string; timeline: TimelineItem[]; createdAt: number }[];
+  versions: { id: string; name: string; timeline: TimelineItem[]; createdAt: number; styleProfileId?: string }[];
+};
+
+export type CustomStyleProfile = {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  traits: {
+    cuttingPace: string;
+    bRollDensity: string;
+    captions: boolean;
+    zoom: boolean;
+  };
 };
 
 export type SettingsState = {
   privacyMode: 'local' | 'hybrid';
   modelProvider: string;
   styleProfile: string;
+  customProfiles: CustomStyleProfile[];
 };
 
 export type AppState = {
@@ -62,6 +83,7 @@ const defaultState: AppState = {
     privacyMode: 'local',
     modelProvider: 'none',
     styleProfile: 'cinematic',
+    customProfiles: [],
   },
 };
 
@@ -85,6 +107,7 @@ class Store {
               ? parsedSettings?.modelProvider ?? 'none'
               : 'none',
             styleProfile: parsedSettings?.styleProfile || defaultState.settings.styleProfile,
+            customProfiles: Array.isArray(parsedSettings?.customProfiles) ? parsedSettings.customProfiles : [],
           },
         };
       } catch {
