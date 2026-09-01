@@ -59,7 +59,7 @@ export type CustomStyleProfile = {
 
 export type SettingsState = {
   privacyMode: 'local' | 'hybrid';
-  modelProvider: string;
+  modelProvider: 'none' | 'gemini' | 'openrouter';
   styleProfile: string;
   customProfiles: CustomStyleProfile[];
 };
@@ -104,7 +104,7 @@ class Store {
           settings: {
             privacyMode: parsedSettings?.privacyMode === 'hybrid' ? 'hybrid' : 'local',
             modelProvider: ['none', 'gemini', 'openrouter'].includes(parsedSettings?.modelProvider ?? '')
-              ? parsedSettings?.modelProvider ?? 'none'
+              ? parsedSettings?.modelProvider as SettingsState['modelProvider'] ?? 'none'
               : 'none',
             styleProfile: parsedSettings?.styleProfile || defaultState.settings.styleProfile,
             customProfiles: Array.isArray(parsedSettings?.customProfiles) ? parsedSettings.customProfiles : [],

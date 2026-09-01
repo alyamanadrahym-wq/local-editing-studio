@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: ai-assistant
+    description: Privacy-gated text-only editing suggestions
 paths:
   /healthz:
     get:
@@ -24,6 +26,62 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /ai/providers:
+    get:
+      operationId: getAiProviders
+      tags: [ai-assistant]
+      summary: Get optional provider availability
+      responses:
+        "200":
+          description: Provider availability
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiProviderStatus"
+  /ai/consent:
+    post:
+      operationId: createAiConsent
+      tags: [ai-assistant]
+      summary: Issue a single-use approval for one reviewed text payload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiConsentInput"
+      responses:
+        "200":
+          description: Single-use consent token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiConsentResult"
+        "400":
+          description: Invalid approval
+  /ai/suggestions:
+    post:
+      operationId: createAiSuggestions
+      tags: [ai-assistant]
+      summary: Generate hook and B-roll suggestions from approved text only
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiSuggestionInput"
+      responses:
+        "200":
+          description: Suggestions generated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AiSuggestionResult"
+        "400":
+          description: Invalid or non-consensual request
+        "429":
+          description: Provider usage limit reached
+        "503":
+          description: Provider unavailable
 components:
   schemas:
     HealthStatus:
@@ -33,4 +91,81 @@ components:
           type: string
       required:
         - status
+    AiProviderStatus:
+      type: object
+      required: [gemini, openrouter]
+      properties:
+        gemini:
+          type: boolean
+        openrouter:
+          type: boolean
+    AiSuggestionInput:
+      type: object
+      additionalProperties: false
+      required: [provider, script, consentToken]
+      properties:
+        provider:
+          type: string
+          enum: [gemini, openrouter]
+        script:
+          type: string
+          minLength: 1
+          maxLength: 12000
+        consentToken:
+          type: string
+          minLength: 1
+    AiConsentInput:
+      type: object
+      additionalProperties: false
+      required: [provider, script, reviewed]
+      properties:
+        provider:
+          type: string
+          enum: [gemini, openrouter]
+        script:
+          type: string
+          minLength: 1
+          maxLength: 12000
+        reviewed:
+          type: boolean
+          const: true
+    AiConsentResult:
+      type: object
+      required: [consentToken, expiresInSeconds]
+      properties:
+        consentToken:
+          type: string
+        expiresInSeconds:
+          type: number
+    AiSuggestionResult:
+      type: object
+      required: [provider, hooks, broll, usage]
+      properties:
+        provider:
+          type: string
+          enum: [gemini, openrouter]
+        hooks:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+        broll:
+          type: array
+          maxItems: 8
+          items:
+            type: string
+        fallback:
+          type: boolean
+        message:
+          type: string
+        usage:
+          type: object
+          required: [used, limit, remaining]
+          properties:
+            used:
+              type: number
+            limit:
+              type: number
+            remaining:
+              type: number
 

@@ -1,14 +1,22 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useStore, updateSettings, clearStore } from '@/lib/store';
 import { clearLocalMedia } from '@/lib/local-media';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
-import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router } from 'lucide-react';
+import { Settings2, ShieldCheck, Cloud, Cpu, Database, Trash2, LockKeyhole, Router, CircleCheck, CircleX } from 'lucide-react';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export default function Settings() {
   const settings = useStore((state) => state.settings);
+  const [availability, setAvailability] = useState<{ gemini: boolean; openrouter: boolean } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/ai/providers')
+      .then((response) => response.ok ? response.json() : Promise.reject())
+      .then(setAvailability)
+      .catch(() => setAvailability({ gemini: false, openrouter: false }));
+  }, []);
 
   const clearData = async () => {
     const confirmed = window.confirm('Clear the project, versions, settings, and all imported local media? This cannot be undone.');
@@ -58,21 +66,32 @@ export default function Settings() {
             <div className="bg-card border border-border rounded-xl p-6 space-y-6">
               <div className="grid gap-2">
                 <Label htmlFor="provider">Provider</Label>
-                <select id="provider" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={settings.modelProvider} onChange={(event) => updateSettings(() => ({ modelProvider: event.target.value }))} disabled={settings.privacyMode === 'local'}>
+                <select id="provider" className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" value={settings.modelProvider} onChange={(event) => updateSettings(() => ({ modelProvider: event.target.value as 'none' | 'gemini' | 'openrouter' }))} disabled={settings.privacyMode === 'local'}>
                   <option value="none">No provider connected</option>
                   <option value="gemini">Google Gemini API</option>
                   <option value="openrouter">OpenRouter</option>
                 </select>
               </div>
 
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                {(['gemini', 'openrouter'] as const).map((provider) => {
+                  const ready = availability?.[provider] ?? false;
+                  return <div key={provider} className="rounded-lg border border-border bg-background p-3 flex items-center gap-2">
+                    {ready ? <CircleCheck className="w-4 h-4 text-emerald-400" /> : <CircleX className="w-4 h-4 text-muted-foreground" />}
+                    <span className="capitalize">{provider}</span>
+                    <span className="ml-auto text-muted-foreground">{availability === null ? 'Checking…' : ready ? 'Ready' : 'Not configured'}</span>
+                  </div>;
+                })}
+              </div>
+
               <div className="rounded-lg border border-border bg-background p-3 flex items-start gap-2">
                 <LockKeyhole className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
-                <p className="text-xs text-muted-foreground leading-relaxed">Provider execution is not enabled in this browser build, so no API key is requested or stored. A future desktop keychain integration will handle credentials securely.</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">Credentials stay on the server (and in the desktop build must come from the OS keychain). They are never entered here or stored in localStorage. Each provider is configured independently.</p>
               </div>
 
               <div className="rounded-lg border border-border bg-background p-3 flex items-start gap-2">
                 <Cpu className="w-4 h-4 text-primary mt-0.5" />
-                <p className="text-xs text-muted-foreground leading-relaxed">Google AI Pro and Flow credits are not treated as Gemini API quota. Provider limits remain separate and are never bypassed.</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">Maximum 20 approved requests per provider per day. Limits remain separate, are never bypassed, and provider failure falls back to the fully local workflow.</p>
               </div>
             </div>
           </section>

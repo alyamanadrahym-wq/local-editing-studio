@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Checkbox } from '@/components/ui/checkbox';
 
 function makeId(): string {
   return crypto.randomUUID();
@@ -101,6 +102,17 @@ export default function Script() {
   
   const [showSaveVariantDialog, setShowSaveVariantDialog] = useState(false);
   const [variantName, setVariantName] = useState("");
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [consent, setConsent] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [suggestions, setSuggestions] = useState<{
+    hooks: string[];
+    broll: string[];
+    usage: { remaining: number };
+    fallback?: boolean;
+    message?: string;
+  } | null>(null);
 
   const saveTimeout = useRef<number | undefined>(undefined);
 
@@ -149,6 +161,39 @@ export default function Script() {
       setIsPlanning(false);
       setPlanReady(true);
     }, 400);
+  };
+
+  const requestSuggestions = async () => {
+    if (settings.privacyMode !== 'hybrid' || settings.modelProvider === 'none' || !consent) return;
+    setAiBusy(true);
+    setAiError('');
+    try {
+      const consentResponse = await fetch('/api/ai/consent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: settings.modelProvider, script: content, reviewed: true }),
+      });
+      const consentData = await consentResponse.json();
+      if (!consentResponse.ok) throw new Error(consentData.error || 'Could not record payload approval.');
+      const response = await fetch('/api/ai/suggestions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          provider: settings.modelProvider,
+          script: content,
+          consentToken: consentData.consentToken,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Provider request failed.');
+      setSuggestions(data);
+      setReviewOpen(false);
+      setConsent(false);
+    } catch (error) {
+      setAiError(error instanceof Error ? error.message : 'Provider unavailable. Continue locally.');
+    } finally {
+      setAiBusy(false);
+    }
   };
 
   const handleSaveVariant = () => {
@@ -234,6 +279,11 @@ export default function Script() {
             {isPlanning ? <Clock className="w-4 h-4 animate-spin text-primary" /> : <Sparkles className="w-4 h-4 text-primary group-hover:animate-pulse" />}
             {isPlanning ? 'Building plan…' : 'Build Plan'}
           </Button>
+          {settings.privacyMode === 'hybrid' && settings.modelProvider !== 'none' && (
+            <Button size="sm" onClick={() => { setAiError(''); setReviewOpen(true); }} disabled={!content.trim()} className="h-8 gap-2">
+              <Wand2 className="w-4 h-4" /> Ask {settings.modelProvider === 'gemini' ? 'Gemini' : 'OpenRouter'}
+            </Button>
+          )}
         </div>
       </header>
 
@@ -343,6 +393,30 @@ export default function Script() {
                   )}
                 </div>
               </div>
+              {aiError && (
+                <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">
+                  {aiError}
+                </div>
+              )}
+              {suggestions && (
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Optional AI suggestions</h4>
+                  {suggestions.fallback && (
+                    <div className="rounded-lg border border-amber-400/30 bg-amber-400/5 p-3 text-xs text-amber-200">
+                      {suggestions.message}
+                    </div>
+                  )}
+                  <div>
+                    <p className="text-xs font-medium mb-1">Hooks</p>
+                    {suggestions.hooks.map((item) => <p key={item} className="text-xs text-muted-foreground mb-1">• {item}</p>)}
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium mb-1">B-roll ideas</p>
+                    {suggestions.broll.map((item) => <p key={item} className="text-xs text-muted-foreground mb-1">• {item}</p>)}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">{suggestions.usage.remaining} provider requests remain today.</p>
+                </div>
+              )}
             </div>
           </ScrollArea>
         </div>
@@ -376,6 +450,34 @@ export default function Script() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSaveVariantDialog(false)}>Cancel</Button>
             <Button onClick={handleSaveVariant} disabled={!variantName.trim()}>Save Variant</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={reviewOpen} onOpenChange={(open) => { setReviewOpen(open); if (!open) setConsent(false); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Review exactly what leaves this device</DialogTitle>
+            <DialogDescription>
+              Only the text below goes to {settings.modelProvider}. No footage, audio, thumbnails, filenames, paths, durations, or asset metadata are included.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-border bg-card p-4">
+            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              Approved payload · script text · {content.length.toLocaleString()} characters
+            </p>
+            <pre className="max-h-64 overflow-auto whitespace-pre-wrap text-xs leading-relaxed">{content}</pre>
+          </div>
+          <label className="flex items-start gap-3 text-sm cursor-pointer">
+            <Checkbox checked={consent} onCheckedChange={(checked) => setConsent(checked === true)} />
+            <span>I approve sending this exact script text once. This does not enable automatic uploads or future requests.</span>
+          </label>
+          {aiError && <p className="text-sm text-amber-300">{aiError}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReviewOpen(false)}>Keep local</Button>
+            <Button onClick={() => void requestSuggestions()} disabled={!consent || aiBusy}>
+              {aiBusy ? 'Sending approved text…' : 'Send once'}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
