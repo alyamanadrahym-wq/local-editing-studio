@@ -16,13 +16,14 @@ Remove-Item $root -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item $archive -Force -ErrorAction SilentlyContinue
 Write-Host "Downloading pinned FFmpeg $version..."
 & curl.exe --fail --location --retry 3 --retry-delay 2 --user-agent "local-editing-studio-release-smoke" --output $archive $url
-if ($LASTEXITCODE -ne 0) {
-  Write-Warning "Direct FFmpeg archive download failed with curl exit code $LASTEXITCODE; trying the pinned Chocolatey package."
+$curlExitCode = $LASTEXITCODE
+if ($curlExitCode -ne 0 -or -not (Test-Path $archive)) {
+  Write-Warning "Direct FFmpeg archive download failed with curl exit code $curlExitCode; trying the pinned Chocolatey package."
 }
 
 $ffmpeg = $null
 $ffprobe = $null
-if (Test-Path $archive) {
+if ($curlExitCode -eq 0 -and (Test-Path $archive)) {
   $actualSha256 = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actualSha256 -ne $expectedSha256) {
     throw "FFmpeg checksum mismatch. Expected $expectedSha256 but downloaded $actualSha256."
