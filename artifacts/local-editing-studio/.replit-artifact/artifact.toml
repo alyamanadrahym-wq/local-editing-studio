@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Local Editing Studio"
+description = "A private, local-first AI video editing workspace for organizing footage, comparing takes, planning cuts, and preparing editable short-form video drafts without uploading media by default."
+version = "1.0.0"
+id = "artifacts/local-editing-studio"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22435
+
+[services.development]
+run = "pnpm --filter @workspace/local-editing-studio run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/local-editing-studio", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/local-editing-studio/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22435"
+BASE_PATH = "/"
