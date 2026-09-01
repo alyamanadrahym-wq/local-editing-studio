@@ -26,7 +26,18 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ROOT = Path(__file__).resolve().parent
-DATA = ROOT / "data"
+
+
+def default_data_dir() -> Path:
+    configured = os.environ.get("LOCAL_EDITING_ENGINE_DATA")
+    if configured:
+        return Path(configured).expanduser().resolve()
+    if os.name == "nt" and os.environ.get("LOCALAPPDATA"):
+        return Path(os.environ["LOCALAPPDATA"]) / "LocalEditingStudio" / "EngineData"
+    return ROOT / "data"
+
+
+DATA = default_data_dir()
 ASSETS = DATA / "assets"
 JOBS = DATA / "jobs"
 TOKEN_FILE = DATA / "pairing-token.txt"
@@ -764,6 +775,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok" if ffmpeg["available"] and ffprobe["available"] else "degraded",
         "engine_version": app.version,
+        "instance_id": os.environ.get("LOCAL_EDITING_ENGINE_INSTANCE", ""),
         "local_only": True,
         "ffmpeg": ffmpeg,
         "ffprobe": ffprobe,

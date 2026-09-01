@@ -1,4 +1,3 @@
-$ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
@@ -11,7 +10,7 @@ Write-Host "Local Editing Engine pairing token (keep this private):" -Foreground
 Write-Host $token -ForegroundColor Cyan
 Write-Host "Clients must send it in X-Local-Engine-Token." -ForegroundColor Yellow
 Write-Host ""
-& .\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 4317
+& .\.venv\Scripts\python.exe .\engine.py
 if ($LASTEXITCODE -ne 0) {
   throw "The local editing engine stopped with exit code $LASTEXITCODE."
 }

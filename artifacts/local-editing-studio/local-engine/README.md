@@ -2,30 +2,53 @@
 
 This service keeps original media on the laptop. It binds only to `127.0.0.1`, performs transcription with faster-whisper, and renders with FFmpeg. It does not contain external upload or telemetry code.
 
-## Exact setup and start steps
+## التثبيت على Windows بنقرة واحدة
 
-1. Install 64-bit Python 3.11 or 3.12 from <https://www.python.org/downloads/windows/>. Enable the Python launcher during installation.
-2. Open PowerShell in this `local-engine` directory.
-3. If Windows blocks local scripts for this terminal, run:
-   ```powershell
-   Set-ExecutionPolicy -Scope Process Bypass
+1. نزّل `LocalEditingEngine-Setup-<version>.exe` وشغّله. لا تحتاج إلى تثبيت Python أو FFmpeg أو تعديل `PATH`؛ كلاهما موجود داخل الحزمة.
+2. اترك خيار اختصار سطح المكتب محددًا، ثم اضغط **Install**.
+3. شغّل اختصار **تشغيل محرك المونتاج**. تظهر نافذة الحالة عندما يصبح المحرك جاهزًا، وتعرض رمز الاقتران وتنسخه إلى الحافظة.
+4. يمكنك لاحقًا استخدام اختصاري **حالة محرك المونتاج ورمز الاقتران** و**إيقاف محرك المونتاج** من قائمة ابدأ.
+
+المحرك يستمع محليًا فقط على `http://127.0.0.1:4317`. رمز الاقتران خاص بهذا الكمبيوتر ويجب عدم مشاركته. مسار `/health` وحده لا يحتاج إلى الرمز.
+
+## التحديثات الآمنة
+
+شغّل مُثبّت الإصدار الجديد فوق الإصدار الحالي. يستبدل المُثبّت ملفات البرنامج والاعتماديات فقط. المشاريع والوسائط ونتائج الرندر ورمز الاقتران محفوظة بصورة مستقلة تحت:
+
+```text
+%LOCALAPPDATA%\LocalEditingStudio\EngineData
+```
+
+لذلك لا يحذفها التحديث ولا يعيد رمز الاقتران. كما ينقل المُثبّت تلقائيًا بيانات الإصدارات القديمة من مجلد البرنامج إلى هذا الموقع عند أول ترقية.
+
+## إزالة التثبيت بالكامل
+
+1. افتح **Settings → Apps → Installed apps**.
+2. اختر **Local Editing Engine** ثم **Uninstall**. يتوقف المحرك وتُحذف ملفات البرنامج والاختصارات.
+3. حفاظًا على مشاريعك، لا يحذف برنامج الإزالة بياناتك تلقائيًا. إذا أردت إزالة كل المشاريع والوسائط والنتائج ورمز الاقتران نهائيًا، احذف هذا المجلد يدويًا بعد الإزالة:
+   ```text
+   %LOCALAPPDATA%\LocalEditingStudio
    ```
-4. Install the pinned Python packages and check/install FFmpeg:
-   ```powershell
-   .\setup.ps1
-   ```
-   If FFmpeg was installed by `winget`, close PowerShell, open a new PowerShell in this directory, and run `.\setup.ps1` once more.
-5. Start the engine:
-   ```powershell
-   .\run.ps1
-   ```
-6. `run.ps1` prints a persistent **pairing token**. Copy it into the browser/app's `X-Local-Engine-Token` request header and keep it private. Confirm `http://127.0.0.1:4317/health` reports `status: "ok"`; health is the only endpoint that does not require the token.
+
+هذا الحذف النهائي غير قابل للتراجع.
+
+## إنشاء حزمة إصدار (للمطور)
+
+يتطلب جهاز البناء Windows x64 وPython 3.11/3.12 و[Inno Setup 6](https://jrsoftware.org/isinfo.php). من PowerShell:
+
+```powershell
+.\windows\build-installer.ps1 -Version 1.0.0 -FfmpegSha256 <SHA-256>
+```
+
+أو استخدم `.\setup.ps1 -Version 1.0.0 -FfmpegSha256 <SHA-256>` للاختصار. يجب أخذ البصمة من ملف الإصدار الموثوق ومراجعتها عند ترقية FFmpeg؛ يرفض البناء أي تنزيل لا يطابقها. ينشئ البناء بيئة مؤقتة، يثبت الاعتماديات المثبتة الإصدارات، وينزّل إصدار FFmpeg محددًا، ويجمّد المحرك مع Python عبر PyInstaller، ثم ينتج ملفًا واحدًا في `dist`. يجب بناء الحزمة على Windows؛ لا يمكن إنتاج ملف Windows موثوق من Linux.
+
+للتطوير من المصدر، أنشئ `.venv` وثبّت `requirements.txt` ثم شغّل `.\run.ps1`. يعتمد تشغيل المصدر على FFmpeg في `PATH`، بينما الحزمة النهائية لا تعتمد عليه.
 
 The first analysis with a named Whisper model downloads that model from the model publisher. Media bytes are never sent with that request. To operate fully offline, run the desired model once while online or set `model` to a previously downloaded local model directory name accepted by faster-whisper.
 
 For NVIDIA acceleration, install a current NVIDIA driver and the CUDA/cuDNN runtime versions required by the pinned CTranslate2 package. `/health` reports the detected GPU names, CUDA availability, whether an RTX GPU was found, and `h264_nvenc.usable`. The latter is an actual one-frame FFmpeg NVENC encode test, not just an encoder-list check. `device: "auto"` uses CUDA when CTranslate2 can access it and otherwise uses CPU. Rendering selects `h264_nvenc` only when that test passes; otherwise it uses `libx264`.
 
-Persistent data is under `local-engine\data`. Completed job results survive restarts. A job interrupted by a restart is marked failed and can be submitted again.
+Persistent installed data is under `%LOCALAPPDATA%\LocalEditingStudio\EngineData`; source development defaults to `local-engine\data`. Set `LOCAL_EDITING_ENGINE_DATA` to override either location. Completed job results survive restarts. A job interrupted by a restart is marked failed and can be submitted again.
 
 ## API contract
 
@@ -113,7 +136,7 @@ CORS permits loopback development origins and Replit development/preview origins
 
 ## Tests
 
-After `setup.ps1`, run:
+From a development virtual environment, run:
 
 ```powershell
 .\.venv\Scripts\python.exe -m py_compile main.py
