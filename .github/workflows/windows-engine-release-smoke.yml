@@ -2,11 +2,16 @@ name: Windows engine release smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Create this release tag only after CPU and RTX qualification (leave blank for test-only)"
+        required: false
+        type: string
   schedule:
     - cron: "17 5 * * 1"
-  push:
-    tags:
-      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
   cpu:
@@ -38,7 +43,6 @@ jobs:
 
   rtx:
     name: Windows RTX + CUDA + NVENC
-    if: ${{ vars.ENABLE_RTX_RELEASE_SMOKE == 'true' }}
     runs-on: [self-hosted, Windows, X64, RTX]
     timeout-minutes: 30
     defaults:
@@ -72,3 +76,19 @@ jobs:
           EXPECT_RTX: "1"
           WHISPER_MODEL: tiny
         run: python -m pytest -q -m windows_release
+
+  release:
+    name: Create release after Windows qualification
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' }}
+    needs: [cpu, rtx]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create qualified GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          TARGET_SHA: ${{ github.sha }}
+        run: gh release create "$RELEASE_TAG" --target "$TARGET_SHA" --generate-notes

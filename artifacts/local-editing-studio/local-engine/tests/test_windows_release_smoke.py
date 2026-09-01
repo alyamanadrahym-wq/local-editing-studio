@@ -178,6 +178,8 @@ def test_rtx_cuda_transcription_and_nvenc_export_when_available(installed_asset:
     if os.environ.get("EXPECT_RTX") != "1":
         pytest.skip("RTX smoke runs only on the Windows RTX release runner")
     health = main.hardware_status()
+    assert health["rtx_available"], health
+    assert any("RTX" in gpu.upper() for gpu in health["nvidia_gpus"]), health
     assert health["cuda_available"], health
     assert main.nvenc_status()["usable"], main.nvenc_status()
 

@@ -144,7 +144,7 @@ From a development virtual environment, run:
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Normal tests remain fast and use mocks. Before every tagged release, and weekly, `.github/workflows/windows-engine-release-smoke.yml` runs the `windows_release` suite on `windows-latest`. It downloads the tiny Whisper model, turns the bundled short Arabic/English speech fixture into a test video, verifies both languages and word timestamps, exports and probes MP4/AAC plus Arabic/English SRT and reopenable JSON, and cancels real FFmpeg and Whisper work.
+Normal tests remain fast and use mocks. Weekly, and through the mandatory release workflow, `.github/workflows/windows-engine-release-smoke.yml` runs the `windows_release` suite on real Windows CPU and RTX runners. It downloads the tiny Whisper model, turns the bundled short Arabic/English speech fixture into a test video, verifies both languages and word timestamps, exports and probes MP4/AAC plus Arabic/English SRT and reopenable JSON, and cancels real FFmpeg and Whisper work.
 
 To qualify a particular camera/container combination too, set `WINDOWS_RELEASE_SAMPLE` to another short Arabic/English video before running the suite. Otherwise the checked-in deterministic bilingual fixture is used.
 
@@ -154,4 +154,6 @@ $env:WINDOWS_RELEASE_SAMPLE = "C:\release-fixtures\arabic-english.mp4" # recomme
 .\.venv\Scripts\python.exe -m pytest -q -m windows_release
 ```
 
-An optional self-hosted runner labeled `Windows`, `X64`, and `RTX` covers CUDA transcription and a real `h264_nvenc` export. Install a current NVIDIA driver plus the CUDA/cuDNN runtime required by CTranslate2, then set the GitHub Actions repository variable `ENABLE_RTX_RELEASE_SMOKE=true`. The workflow provisions Python, installs the engine dependencies, installs FFmpeg through Chocolatey when needed, and verifies `ffmpeg`, `ffprobe`, and `nvidia-smi` before testing. The RTX job fails if CUDA or the one-frame NVENC probe is unavailable; it never silently passes through the CPU fallback. The CPU job explicitly verifies `libx264` and verifies that `auto` falls back to it when the NVENC probe fails.
+A self-hosted runner labeled `Windows`, `X64`, and `RTX` is required for CUDA transcription and a real `h264_nvenc` export. Install a current NVIDIA RTX GPU and driver plus the CUDA/cuDNN runtime required by CTranslate2. The workflow provisions Python, installs the engine dependencies, installs FFmpeg through Chocolatey when needed, and verifies `ffmpeg`, `ffprobe`, `nvidia-smi`, the reported RTX model, CUDA, and a real NVENC encode before testing. It never silently passes through the CPU fallback. The CPU job explicitly verifies `libx264` and verifies that `auto` falls back to it when the NVENC probe fails.
+
+To create a release, run **Windows engine release smoke** manually and enter the desired `release_tag`. The workflow creates that tag and GitHub Release only after both the hosted CPU job and required self-hosted RTX job pass. Do not create release tags through another path. Leave `release_tag` blank for a qualification-only run. This makes Windows qualification a pre-release gate rather than a check that starts after a tag already exists.
