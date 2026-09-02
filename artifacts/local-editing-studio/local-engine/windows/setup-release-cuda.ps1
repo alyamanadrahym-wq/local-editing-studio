@@ -13,16 +13,22 @@ $sitePackages = & python -c "import site; print(site.getsitepackages()[0])"
 if ($LASTEXITCODE -ne 0 -or -not $sitePackages) {
   throw "Could not locate the Python site-packages directory."
 }
+$pythonPrefix = & python -c "import sys; print(sys.prefix)"
+if ($LASTEXITCODE -ne 0 -or -not $pythonPrefix) {
+  throw "Could not locate the Python installation directory."
+}
 
-$cudaDllDirectories = @(
-  (Join-Path $sitePackages "nvidia\cublas\bin"),
-  (Join-Path $sitePackages "nvidia\cudnn\bin")
-)
+$cudaDllDirectories = @()
+foreach ($library in @("cublas", "cudnn")) {
+  $directory = @(
+    (Join-Path $pythonPrefix "nvidia\$library\bin"),
+    (Join-Path $sitePackages "nvidia\$library\bin")
+  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 
-foreach ($directory in $cudaDllDirectories) {
-  if (-not (Test-Path $directory)) {
-    throw "Pinned CUDA runtime directory was not installed: $directory"
+  if (-not $directory) {
+    throw "Pinned CUDA runtime directory for $library was not installed under $pythonPrefix or $sitePackages."
   }
+  $cudaDllDirectories += $directory
   $env:Path = "$directory;$env:Path"
   if ($env:GITHUB_PATH) {
     Add-Content -Path $env:GITHUB_PATH -Value $directory
