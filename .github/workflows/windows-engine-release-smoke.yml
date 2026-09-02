@@ -64,7 +64,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: artifacts/local-editing-studio/local-engine/requirements.txt
+          cache-dependency-path: |
+            artifacts/local-editing-studio/local-engine/requirements.txt
+            artifacts/local-editing-studio/local-engine/requirements-cuda.txt
 
       - name: Install pinned release FFmpeg
         shell: powershell
@@ -78,6 +80,7 @@ jobs:
           $sitePackages = python -c "import site; print(site.getsitepackages()[0])"
           Get-ChildItem $sitePackages -Recurse -File -Include *.pyd,*.dll `
             -ErrorAction SilentlyContinue | Unblock-File
+          .\windows\setup-release-cuda.ps1
           Get-Command ffmpeg
           Get-Command ffprobe
           Get-Command nvidia-smi
