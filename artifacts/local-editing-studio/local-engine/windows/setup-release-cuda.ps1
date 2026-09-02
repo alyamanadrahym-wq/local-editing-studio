@@ -18,30 +18,40 @@ if ($LASTEXITCODE -ne 0 -or -not $pythonPrefix) {
   throw "Could not locate the Python installation directory."
 }
 
-$cudaDllDirectories = @()
-foreach ($library in @("cublas", "cudnn")) {
-  $directory = @(
-    (Join-Path $pythonPrefix "nvidia\$library\bin"),
-    (Join-Path $sitePackages "nvidia\$library\bin")
-  ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+$nvidiaRoots = @(
+  (Join-Path $pythonPrefix "nvidia"),
+  (Join-Path $sitePackages "nvidia")
+) | Where-Object { Test-Path $_ } | Select-Object -Unique
+if (-not $nvidiaRoots) {
+  throw "Pinned NVIDIA runtime packages were not installed under $pythonPrefix or $sitePackages."
+}
 
-  if (-not $directory) {
-    throw "Pinned CUDA runtime directory for $library was not installed under $pythonPrefix or $sitePackages."
+$requiredDllNames = @("cublas64_12.dll", "cudnn64_9.dll")
+$requiredDlls = @()
+foreach ($dllName in $requiredDllNames) {
+  $dll = $nvidiaRoots |
+    ForEach-Object {
+      Get-ChildItem $_ -Filter $dllName -Recurse -File -ErrorAction SilentlyContinue
+    } |
+    Select-Object -First 1
+  if (-not $dll) {
+    throw "Required CTranslate2 CUDA library was not installed: $dllName"
   }
-  $cudaDllDirectories += $directory
+  $requiredDlls += $dll
+}
+
+foreach ($root in $nvidiaRoots) {
+  Get-ChildItem $root -Filter *.dll -Recurse -File -ErrorAction SilentlyContinue |
+    Unblock-File -ErrorAction SilentlyContinue
+}
+
+$cudaDllDirectories = $requiredDlls |
+  ForEach-Object { $_.DirectoryName } |
+  Select-Object -Unique
+foreach ($directory in $cudaDllDirectories) {
   $env:Path = "$directory;$env:Path"
   if ($env:GITHUB_PATH) {
     Add-Content -Path $env:GITHUB_PATH -Value $directory
-  }
-}
-
-$requiredDlls = @(
-  (Join-Path $cudaDllDirectories[0] "cublas64_12.dll"),
-  (Join-Path $cudaDllDirectories[1] "cudnn64_9.dll")
-)
-foreach ($dll in $requiredDlls) {
-  if (-not (Test-Path $dll)) {
-    throw "Required CTranslate2 CUDA library was not installed: $dll"
   }
 }
 
